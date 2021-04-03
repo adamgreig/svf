@@ -5,8 +5,10 @@
 //!
 //! Parse SVF files.
 
+pub mod parser;
+
 /// IEEE 1149.1 TAP states with SVF TAP state names.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum State {
     /// Test-Logic-Reset
     RESET,
@@ -24,7 +26,7 @@ pub enum State {
     DRSHIFT,
 
     /// Exit1-DR
-    DREXTI1,
+    DREXIT1,
 
     /// Pause-DR
     DRPAUSE,
@@ -57,8 +59,18 @@ pub enum State {
     IRUPDATE,
 }
 
+impl State {
+    /// Check if this state is one of the stable states IRPAUSE, DRPAUSE, RESET, or IDLE.
+    pub fn is_stable(&self) -> bool {
+        match self {
+            State::DRPAUSE | State::IRPAUSE | State::RESET | State::IDLE => true,
+            _ => false,
+        }
+    }
+}
+
 /// Vector characters for a parallel test vector.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum VectorChar {
     /// Drive logical 1
     H,
@@ -80,7 +92,7 @@ pub enum VectorChar {
 }
 
 /// Data pattern used for HDR, HIR, SDR, SIR, TDR, and TIR commands.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Pattern {
     /// Number of bits to be scanned.
     length: u32,
@@ -109,7 +121,7 @@ pub struct Pattern {
 }
 
 /// Possible directions for a column in a PIOMAP command.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum PIOMapDirection {
     /// Input to the unit under test, uses H, L, or Z characters.
     In,
@@ -122,7 +134,7 @@ pub enum PIOMapDirection {
 }
 
 /// Possible clocks for the `run_clk` argument to RUNTEST.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum RunClock {
     /// Test clock
     TCK,
@@ -132,7 +144,7 @@ pub enum RunClock {
 }
 
 /// Possible modes for the TRST signal.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum TRSTMode {
     /// Active (logic 0)
     On,
@@ -148,7 +160,7 @@ pub enum TRSTMode {
 }
 
 /// SVF command and corresponding parsed data.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     /// State for the bus after a DR scan.
     EndDR(State),
@@ -157,7 +169,7 @@ pub enum Command {
     EndIR(State),
 
     /// Maximum TCK frequency for subsequent scans, state changes, and test operations.
-    Frequency(f32),
+    Frequency(f64),
 
     /// Default header pattern shifted in before every data register scan operation.
     HDR(Pattern),
