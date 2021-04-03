@@ -99,25 +99,44 @@ pub struct Pattern {
 
     /// Value to be scanned into the target.
     /// If not specified, the previously specified TDI for this command is used.
-    /// Bits are packed into bytes least-significant-bit and least-significant-byte first.
+    /// Bits are packed into bytes least-significant-bit and least-significant-byte first,
+    /// and the vector is automatically zero-padded to contain enough bits for the length.
     tdi: Option<Vec<u8>>,
 
     /// Value to compare against actual values scanned out of the target.
     /// If not specified, no comparison is performed.
-    /// Bits are packed into bytes least-significant-bit and least-significant-byte first.
+    /// Bits are packed into bytes least-significant-bit and least-significant-byte first,
+    /// and the vector is automatically zero-padded to contain enough bits for the length.
     tdo: Option<Vec<u8>>,
 
     /// Mask used when comparing TDO values against actual values.
     /// 1 indicates care, 0 indicates don't-care.
     /// If not specified, the previously specified MASK for this command is used.
-    /// Bits are packed into bytes least-significant-bit and least-significant-byte first.
+    /// Bits are packed into bytes least-significant-bit and least-significant-byte first,
+    /// and the vector is automatically zero-padded to contain enough bits for the length.
     mask: Option<Vec<u8>>,
 
     /// Mask TDI data.
     /// 1 indicates care, 0 indicates don't-care.
     /// If not specified, the previously specified SMASK for this command is used.
-    /// Bits are packed into bytes least-significant-bit and least-significant-byte first.
+    /// Bits are packed into bytes least-significant-bit and least-significant-byte first,
+    /// and the vector is automatically zero-padded to contain enough bits for the length.
     smask: Option<Vec<u8>>,
+}
+
+impl Pattern {
+    /// Extend all non-None scan data to contain as many trailing 0s
+    /// as required to make up the bit length.
+    fn extend(mut self) -> Self {
+        for data in [&mut self.tdi, &mut self.tdo, &mut self.mask, &mut self.smask].iter_mut() {
+            if let Some(data) = data {
+                while data.len() * 8 < self.length as usize {
+                    data.push(0);
+                }
+            }
+        }
+        self
+    }
 }
 
 /// Possible directions for a column in a PIOMAP command.
@@ -169,7 +188,7 @@ pub enum Command {
     EndIR(State),
 
     /// Maximum TCK frequency for subsequent scans, state changes, and test operations.
-    Frequency(f64),
+    Frequency(Option<f64>),
 
     /// Default header pattern shifted in before every data register scan operation.
     HDR(Pattern),

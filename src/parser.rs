@@ -305,7 +305,7 @@ fn named_scandata<'a>(tag: &'static str)
     preceded(
         terminated(
             tag_no_case(tag),
-            ws1,
+            ws0,
         ),
         scandata,
     )
@@ -326,7 +326,7 @@ fn pattern(input: &str) -> IResult<&str, Pattern> {
             success(None)
         };
         ($tag:literal) => {
-            map(preceded(ws1, named_scandata($tag)), |x| Some(x))
+            map(preceded(ws0, named_scandata($tag)), |x| Some(x))
         };
     }
 
@@ -380,7 +380,7 @@ fn pattern(input: &str) -> IResult<&str, Pattern> {
             tdo: pattern.1.1,
             mask: pattern.1.2,
             smask: pattern.1.3,
-        }
+        }.extend()
     )(input)
 }
 
@@ -409,9 +409,9 @@ fn command_enddr_endir(input: &str) -> IResult<&str, Command> {
 /// Parse the FREQUENCY command, which specifies a real number frequency.
 fn command_frequency(input: &str) -> IResult<&str, Command> {
     map(delimited(
-        terminated(tag_no_case("FREQUENCY"), ws1),
-        delimited(ws0, real, delimited(ws0, tag_no_case("HZ"), ws0)),
-        nom_char(';'),
+        tag_no_case("FREQUENCY"),
+        opt(delimited(ws1, real, preceded(ws1, tag_no_case("HZ")))),
+        preceded(ws0, nom_char(';')),
     ), |f| Command::Frequency(f))(input)
 }
 
@@ -740,32 +740,51 @@ mod tests {
             Ok(("_", Pattern { length: 0, tdi: None, tdo: None, mask: None, smask: None }))
         );
         assert_eq!(
-            pattern("123 TDI (1)_"),
-            Ok(("_", Pattern { length: 123, tdi: Some(vec![1]), tdo: None, mask: None, smask: None }))
-        );
-        assert_eq!(
-            pattern("123 MASK (3)_"),
-            Ok(("_", Pattern { length: 123, tdi: None, tdo: None, mask: Some(vec![3]), smask: None }))
-        );
-        assert_eq!(
-            pattern("1 TDI (1) TDO (2) MASK (3) SMASK (4)_"),
+            pattern("16 TDI (1)_"),
             Ok(("_", Pattern {
-                length: 1, tdi: Some(vec![1]), tdo: Some(vec![2]),
-                mask: Some(vec![3]), smask: Some(vec![4]),
+                length: 16,
+                tdi: Some(vec![1, 0]),
+                tdo: None,
+                mask: None,
+                smask: None
             }))
         );
         assert_eq!(
-            pattern("1 SMASK (4) MASK (3) TDI (1) TDO (2)_"),
+            pattern("8 MASK (3)_"),
             Ok(("_", Pattern {
-                length: 1, tdi: Some(vec![1]), tdo: Some(vec![2]),
-                mask: Some(vec![3]), smask: Some(vec![4]),
+                length: 8,
+                tdi: None,
+                tdo: None,
+                mask: Some(vec![3]),
+                smask: None
+            }))
+        );
+        assert_eq!(
+            pattern("3 TDI (1) TDO (2) MASK (3) SMASK (4)_"),
+            Ok(("_", Pattern {
+                length: 3,
+                tdi: Some(vec![1]),
+                tdo: Some(vec![2]),
+                mask: Some(vec![3]),
+                smask: Some(vec![4]),
+            }))
+        );
+        assert_eq!(
+            pattern("3 SMASK (4) MASK (3) TDI (1) TDO (2)_"),
+            Ok(("_", Pattern {
+                length: 3,
+                tdi: Some(vec![1]),
+                tdo: Some(vec![2]),
+                mask: Some(vec![3]),
+                smask: Some(vec![4]),
             }))
         );
     }
 
     #[test]
     fn test_command_enddr_endir() {
-        assert_eq!(command_enddr_endir("ENDDR RESET;"),       Ok(("", Command::EndDR(State::RESET))));
+        assert_eq!(command_enddr_endir("ENDDR IDLE;"),        Ok(("", Command::EndDR(State::IDLE))));
+        assert_eq!(command_enddr_endir("ENDDR DRPAUSE;"),     Ok(("", Command::EndDR(State::DRPAUSE))));
         assert_eq!(command_enddr_endir("ENDIR RESET;"),       Ok(("", Command::EndIR(State::RESET))));
         assert_eq!(command_enddr_endir("ENDDR \n RESET ;"),   Ok(("", Command::EndDR(State::RESET))));
         assert_eq!(command_enddr_endir("ENDDR !c\n RESET ;"), Ok(("", Command::EndDR(State::RESET))));
@@ -773,15 +792,34 @@ mod tests {
 
     #[test]
     fn test_command_frequency() {
-        assert_eq!(command_frequency("FREQUENCY 1e6 Hz;"),  Ok(("", Command::Frequency(1e6))));
+        assert_eq!(command_frequency("FREQUENCY 90e3 Hz;"),
+                   Ok(("", Command::Frequency(Some(90e3)))));
+        assert_eq!(command_frequency("FREQUENCY 1E5 Hz;"),
+                   Ok(("", Command::Frequency(Some(1e5)))));
+        assert_eq!(command_frequency("FREQUENCY;"),
+                   Ok(("", Command::Frequency(None))));
     }
 
     #[test]
     fn test_pattern_commands() {
         assert_eq!(
-            command_hdr_hir_tdr_tir_sdr_sir("HDR 8 TDI (1) TDO (2) MASK (3);"),
+            command_hdr_hir_tdr_tir_sdr_sir("HDR 32 TDI(00000010) TDO(81818181) MASK(FFFFFFFF) SMASK(0);"),
             Ok(("", Command::HDR(Pattern {
-                length: 8, tdi: Some(vec![1]), tdo: Some(vec![2]), mask: Some(vec![3]), smask: None
+               length: 32,
+               tdi: Some(vec![0x10, 0x00, 0x00, 0x00]),
+               tdo: Some(vec![0x81, 0x81, 0x81, 0x81]),
+               mask: Some(vec![0xFF, 0xFF, 0xFF, 0xFF]),
+               smask: Some(vec![0x00, 0x00, 0x00, 0x00]),
+            })))
+        );
+        assert_eq!(
+            command_hdr_hir_tdr_tir_sdr_sir("HIR 16 TDI(ABCD);"),
+            Ok(("", Command::HIR(Pattern {
+               length: 16,
+               tdi: Some(vec![0xCD, 0xAB]),
+               tdo: None,
+               mask: None,
+               smask: None,
             })))
         );
         assert_eq!(
@@ -790,20 +828,51 @@ mod tests {
                 length: 0, tdi: None, tdo: None, mask: None, smask: None
             })))
         );
+        assert_eq!(
+            command_hdr_hir_tdr_tir_sdr_sir("HDR 8 TDI (1) TDO (2) MASK (3);"),
+            Ok(("", Command::HDR(Pattern {
+                length: 8, tdi: Some(vec![1]), tdo: Some(vec![2]), mask: Some(vec![3]), smask: None
+            })))
+        );
+        assert_eq!(
+            command_hdr_hir_tdr_tir_sdr_sir("HDR 8 TDO (2) MASK (3);"),
+            Ok(("", Command::HDR(Pattern {
+                length: 8, tdi: None, tdo: Some(vec![2]), mask: Some(vec![3]), smask: None
+            })))
+        );
+        assert_eq!(
+            command_hdr_hir_tdr_tir_sdr_sir("HDR 8 TDO (2);"),
+            Ok(("", Command::HDR(Pattern {
+                length: 8, tdi: None, tdo: Some(vec![2]), mask: None, smask: None
+            })))
+        );
     }
 
     #[test]
     fn test_command_pio() {
         use VectorChar::*;
-        assert_eq!(command_pio("PIO (HLXZ);"), Ok(("", Command::PIO(vec![H, L, X, Z]))));
+        assert_eq!(command_pio("PIO (HLUDXZHHLL);"),
+                   Ok(("", Command::PIO(vec![H, L, U, D, X, Z, H, H, L, L]))));
     }
 
     #[test]
     fn test_command_piomap() {
         use PIOMapDirection::*;
         assert_eq!(
-            command_piomap("PIOMAP (IN A OUT B);"),
-            Ok(("", Command::PIOMap(vec![(In, "A".to_string()), (Out, "B".to_string())]))),
+            command_piomap("PIOMAP (IN  STROBE
+                                    IN  ALE
+                                    OUT DISABLE
+                                    OUT ENABLE
+                                    OUT CLEAR
+                                    IN  SET);"),
+            Ok(("", Command::PIOMap(vec![
+                (In, "STROBE".to_string()),
+                (In, "ALE".to_string()),
+                (Out, "DISABLE".to_string()),
+                (Out, "ENABLE".to_string()),
+                (Out, "CLEAR".to_string()),
+                (In, "SET".to_string()),
+            ]))),
         );
     }
 
@@ -894,6 +963,17 @@ mod tests {
         assert_eq!(
             command_state("STATE IDLE;"),
             Ok(("", Command::State { path: None, end: IDLE })),
+        );
+        assert_eq!(
+            command_state("STATE DRPAUSE;"),
+            Ok(("", Command::State { path: None, end: DRPAUSE })),
+        );
+        assert_eq!(
+            command_state("STATE DREXIT2 DRUPDATE DRSELECT IRSELECT IRCAPTURE IREXIT1 IRPAUSE;"),
+            Ok(("", Command::State {
+                path: Some(vec![DREXIT2, DRUPDATE, DRSELECT, IRSELECT, IRCAPTURE, IREXIT1]),
+                end: IRPAUSE
+            })),
         );
     }
 
