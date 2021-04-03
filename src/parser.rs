@@ -11,14 +11,7 @@ use nom::{
     error::{ErrorKind, ParseError, FromExternalError},
 };
 
-use super::{
-    State,
-    Pattern,
-    VectorChar,
-    PIOMapDirection,
-    TRSTMode,
-    Command,
-};
+use super::{State, Pattern, VectorChar, PIOMapDirection, TRSTMode, RunClock, Command};
 
 /// SVF parse error.
 ///
@@ -290,6 +283,18 @@ fn state(input: &str) -> IResult<&str, State> {
     )(input)
 }
 
+/// Parse a run_clk option, either TCK or SCK.
+fn run_clk(input: &str) -> IResult<&str, RunClock> {
+    map(
+        alt((tag_no_case("TCK"), tag_no_case("SCK"))),
+        |s: &str| match s.to_ascii_uppercase().as_str() {
+            "TCK" => RunClock::TCK,
+            "SCK" => RunClock::SCK,
+            _     => unreachable!(),
+        }
+    )(input)
+}
+
 /// Parse scandata preceded by a specific name, ignoring any whitespace between the
 /// name and the scandata.
 ///
@@ -457,6 +462,66 @@ fn command_piomap(input: &str) -> IResult<&str, Command> {
             nom_char(';'),
         ),
         |v| Command::PIOMap(v),
+    )(input)
+}
+
+/// Parse the RUNTEST command.
+fn command_runtest(input: &str) -> IResult<&str, Command> {
+    map_res(
+        delimited(
+            terminated(tag_no_case("RUNTEST"), ws1),
+            // Match either form of command:
+            // 1) [run_state] run_count run_clk [min_time [max_time]] [end_state]
+            // 2) [run_state] None      None     min_time [max_time]  [end_state]
+            alt((
+                tuple((
+                    opt(terminated(state, ws1)),
+                    map(terminated(decimal, ws1), |x| Some(x)),
+                    map(run_clk, |x| Some(x)),
+                    opt(tuple((
+                        delimited(ws1, real, preceded(ws1, tag_no_case("SEC"))),
+                        opt(delimited(
+                            delimited(ws1, tag_no_case("MAXIMUM"), ws1),
+                            real,
+                            preceded(ws1, tag_no_case("SEC"))
+                        )),
+                    ))),
+                    opt(preceded(delimited(ws1, tag_no_case("ENDSTATE"), ws1), state)),
+                )),
+                tuple((
+                    opt(terminated(state, ws1)),
+                    success(None),
+                    success(None),
+                    map(tuple((
+                        terminated(real, preceded(ws1, tag_no_case("SEC"))),
+                        opt(delimited(
+                            delimited(ws1, tag_no_case("MAXIMUM"), ws1),
+                            real,
+                            preceded(ws1, tag_no_case("SEC"))
+                        )),
+                    )), |x| Some(x)),
+                    opt(preceded(delimited(ws1, tag_no_case("ENDSTATE"), ws1), state)),
+                )),
+            )),
+            preceded(ws0, nom_char(';')),
+        ),
+        |x| {
+            // Check the run and end states, if specified, are stable states.
+            if x.0.map(|x| x.is_stable()) == Some(false) {
+                Err(SVFParseError::NotStableState(input, x.0.unwrap()))
+            } else if x.4.map(|x| x.is_stable()) == Some(false) {
+                Err(SVFParseError::NotStableState(input, x.4.unwrap()))
+            } else {
+                Ok(Command::RunTest {
+                    run_state: x.0,
+                    run_count: x.1,
+                    run_clk: x.2,
+                    min_time: x.3.map(|x| x.0),
+                    max_time: x.3.map(|x| x.1).flatten(),
+                    end_state: x.4,
+                })
+            }
+        }
     )(input)
 }
 
@@ -645,6 +710,13 @@ mod tests {
     }
 
     #[test]
+    fn test_run_clk() {
+        assert_eq!(run_clk("TCK"), Ok(("", RunClock::TCK)));
+        assert_eq!(run_clk("sck"), Ok(("", RunClock::SCK)));
+        assert!(run_clk("nck").is_err());
+    }
+
+    #[test]
     fn test_named_scandata() {
         // Test basic examples with spaces all work.
         assert_eq!(named_scandata("TDI")("TDI (1)"), Ok(("", vec![1])));
@@ -732,6 +804,87 @@ mod tests {
         assert_eq!(
             command_piomap("PIOMAP (IN A OUT B);"),
             Ok(("", Command::PIOMap(vec![(In, "A".to_string()), (Out, "B".to_string())]))),
+        );
+    }
+
+    #[test]
+    fn test_command_runtest() {
+        assert_eq!(
+            command_runtest("RUNTEST 1000 TCK ENDSTATE DRPAUSE;"),
+            Ok(("", Command::RunTest {
+                run_state: None,
+                run_count: Some(1000),
+                run_clk: Some(RunClock::TCK),
+                min_time: None,
+                max_time: None,
+                end_state: Some(State::DRPAUSE),
+            }))
+        );
+        assert_eq!(
+            command_runtest("RUNTEST 20 SCK;"),
+            Ok(("", Command::RunTest {
+                run_state: None,
+                run_count: Some(20),
+                run_clk: Some(RunClock::SCK),
+                min_time: None,
+                max_time: None,
+                end_state: None,
+            }))
+        );
+        assert_eq!(
+            command_runtest("RUNTEST 1000000 TCK 1 SEC;"),
+            Ok(("", Command::RunTest {
+                run_state: None,
+                run_count: Some(1000000),
+                run_clk: Some(RunClock::TCK),
+                min_time: Some(1.0),
+                max_time: None,
+                end_state: None,
+            }))
+        );
+        assert_eq!(
+            command_runtest("RUNTEST 10.0E-3 SEC MAXIMUM 50.0E-3 SEC ENDSTATE IDLE;"),
+            Ok(("", Command::RunTest {
+                run_state: None,
+                run_count: None,
+                run_clk: None,
+                min_time: Some(10e-3),
+                max_time: Some(50e-3),
+                end_state: Some(State::IDLE),
+            }))
+        );
+        assert_eq!(
+            command_runtest("RUNTEST DRPAUSE 50E-3 SEC ENDSTATE IDLE;"),
+            Ok(("", Command::RunTest {
+                run_state: Some(State::DRPAUSE),
+                run_count: None,
+                run_clk: None,
+                min_time: Some(50e-3),
+                max_time: None,
+                end_state: Some(State::IDLE),
+            }))
+        );
+        assert_eq!(
+            command_runtest("RUNTEST 1 SEC;"),
+            Ok(("", Command::RunTest {
+                run_state: None,
+                run_count: None,
+                run_clk: None,
+                min_time: Some(1.0),
+                max_time: None,
+                end_state: None,
+            }))
+        );
+        assert_eq!(
+            command_runtest("RUNTEST IDLE 1E-2 SEC;"),
+            Ok(("", Command::RunTest {
+                run_state: Some(State::IDLE),
+                run_count: None,
+                run_clk: None,
+                min_time: Some(1e-2),
+                max_time: None,
+                end_state: None,
+            }))
         );
     }
 

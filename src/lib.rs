@@ -199,10 +199,10 @@ pub enum Command {
         run_clk: Option<RunClock>,
 
         /// Minimum amount of time in seconds to stay in run_state.
-        min_time: Option<f32>,
+        min_time: Option<f64>,
 
         /// Maximum amount of time in seconds to stay in run_state.
-        max_time: Option<f32>,
+        max_time: Option<f64>,
 
         /// State to enter after completion of command.
         /// One of IRPAUSE, DRPAUSE, RESET, or IDLE.
