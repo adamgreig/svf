@@ -178,6 +178,24 @@ pub enum TRSTMode {
     Absent,
 }
 
+/// Minimum and optional maximum time to run a RunTest command for.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunTestTime {
+    min: f64,
+    max: Option<f64>,
+}
+
+/// Possible forms of the RunTest arguments.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RunTestForm {
+    Clocked {
+        run_count: u32,
+        run_clk: RunClock,
+        time: Option<RunTestTime>,
+    },
+    Timed(RunTestTime),
+}
+
 /// SVF command and corresponding parsed data.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
@@ -211,17 +229,10 @@ pub enum Command {
         /// If not specified, uses the run_state specified in the previous RUNTEST command.
         run_state: Option<State>,
 
-        /// Number of clocks to remain in the run state.
-        run_count: Option<u32>,
-
-        /// Clock used to count cycles, either TCK or SCK.
-        run_clk: Option<RunClock>,
-
-        /// Minimum amount of time in seconds to stay in run_state.
-        min_time: Option<f64>,
-
-        /// Maximum amount of time in seconds to stay in run_state.
-        max_time: Option<f64>,
+        /// The run_count, run_clk, min_time, and max_time parameters are stored
+        /// in this RunTestForm enum which encodes the various ways in which they
+        /// may be specified or omitted.
+        form: RunTestForm,
 
         /// State to enter after completion of command.
         /// One of IRPAUSE, DRPAUSE, RESET, or IDLE.

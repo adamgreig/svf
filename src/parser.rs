@@ -2,21 +2,32 @@ use thiserror::Error;
 use nom::{
     branch::{alt, permutation},
     bytes::streaming::{tag, tag_no_case, is_a},
-    combinator::{opt, recognize, success, map, map_res},
+    combinator::{complete, all_consuming, opt, recognize, success, map, map_res},
     character::streaming::{
         char as nom_char, hex_digit1, line_ending, not_line_ending, digit1, multispace1, alpha1,
     },
-    multi::{many0, many1, separated_list0, separated_list1},
+    character::complete::multispace1 as multispace1_complete,
+    multi::{many0, many1, many0_count, many1_count, separated_list0, separated_list1},
     sequence::{delimited, preceded, terminated, tuple},
     error::{ErrorKind, ParseError, FromExternalError},
 };
 
-use super::{State, Pattern, VectorChar, PIOMapDirection, TRSTMode, RunClock, Command};
+use super::{
+    Command,
+    PIOMapDirection,
+    Pattern,
+    RunClock,
+    RunTestForm,
+    RunTestTime,
+    State,
+    TRSTMode,
+    VectorChar,
+};
 
 /// SVF parse error.
 ///
-/// Encapsulates nom-generated errors in the Nom variant,
-/// or raises other specific errors.
+/// Each error contains the input that caused the error and
+/// potentially other relevant metadata.
 #[derive(Clone, Debug, PartialEq, Error)]
 pub enum SVFParseError<I: std::fmt::Debug> {
     #[error("Could not parse f64 from real number")]
@@ -27,13 +38,17 @@ pub enum SVFParseError<I: std::fmt::Debug> {
     BadPIOMapIndices(I),
     #[error("State '{1:?}' is not a stable state")]
     NotStableState(I, State),
-    #[error("Parser error")]
-    Nom(I, ErrorKind),
+    #[error("RunTest command has invalid arguments")]
+    InvalidRunTest(I),
+    #[error("Incomplete data - retry with at least {1} more bytes of data")]
+    Incomplete(I, usize),
+    #[error("Parser error: {1:?}")]
+    Parser(I, String),
 }
 
 impl<I: std::fmt::Debug> ParseError<I> for SVFParseError<I> {
     fn from_error_kind(input: I, kind: ErrorKind) -> Self {
-        SVFParseError::Nom(input, kind)
+        SVFParseError::Parser(input, kind.description().to_string())
     }
     fn append(_: I, _: ErrorKind, other: Self) -> Self {
         other
@@ -42,7 +57,7 @@ impl<I: std::fmt::Debug> ParseError<I> for SVFParseError<I> {
 
 impl<I: std::fmt::Debug> From<(I, ErrorKind)> for SVFParseError<I> {
     fn from((i, kind): (I, ErrorKind)) -> Self {
-        SVFParseError::Nom(i, kind)
+        SVFParseError::Parser(i, kind.description().to_string())
     }
 }
 
@@ -67,12 +82,20 @@ fn comment(input: &str) -> IResult<&str, &str> {
 
 /// Consume any amount of comments or whitespace.
 fn ws0(input: &str) -> IResult<&str, &str> {
-    recognize(many0(alt((comment, multispace1))))(input)
+    recognize(many0_count(alt((comment, multispace1))))(input)
+}
+
+/// Consume any amount of whitespace where the input is known to be complete.
+///
+/// This method will consume all whitespace to the end of the input,
+/// but not then return Incomplete suggesting more could potentially be read.
+fn ws0_complete(input: &str) -> IResult<&str, &str> {
+    recognize(many0_count(complete(alt((comment, multispace1_complete)))))(input)
 }
 
 /// Consume at least some comments or whitespace.
 fn ws1(input: &str) -> IResult<&str, &str> {
-    recognize(many1(alt((comment, multispace1))))(input)
+    recognize(many1_count(alt((comment, multispace1))))(input)
 }
 
 /// Parse scan data, which is always hexadecimal data surrounded by brackets.
@@ -476,8 +499,10 @@ fn command_runtest(input: &str) -> IResult<&str, Command> {
             alt((
                 tuple((
                     opt(terminated(state, ws1)),
-                    map(terminated(decimal, ws1), |x| Some(x)),
-                    map(run_clk, |x| Some(x)),
+                    map(tuple((
+                        terminated(decimal, ws1),
+                        run_clk,
+                    )), |x| Some(x)),
                     opt(tuple((
                         delimited(ws1, real, preceded(ws1, tag_no_case("SEC"))),
                         opt(delimited(
@@ -490,7 +515,6 @@ fn command_runtest(input: &str) -> IResult<&str, Command> {
                 )),
                 tuple((
                     opt(terminated(state, ws1)),
-                    success(None),
                     success(None),
                     map(tuple((
                         terminated(real, preceded(ws1, tag_no_case("SEC"))),
@@ -509,16 +533,29 @@ fn command_runtest(input: &str) -> IResult<&str, Command> {
             // Check the run and end states, if specified, are stable states.
             if x.0.map(|x| x.is_stable()) == Some(false) {
                 Err(SVFParseError::NotStableState(input, x.0.unwrap()))
-            } else if x.4.map(|x| x.is_stable()) == Some(false) {
-                Err(SVFParseError::NotStableState(input, x.4.unwrap()))
+            } else if x.3.map(|x| x.is_stable()) == Some(false) {
+                Err(SVFParseError::NotStableState(input, x.3.unwrap()))
             } else {
+                // Extract the optional min_time and max_time parameters.
+                let time = x.2.map(|(min, max)| RunTestTime { min, max });
+                // Determine the specified form of the command.
+                let form = match x.1 {
+                    // If run_count and run_clk are specified, use Clocked with an optional time.
+                    Some((run_count, run_clk)) => RunTestForm::Clocked {
+                        run_count, run_clk, time,
+                    },
+                    // If neither are specified, use time if available.
+                    // If neither run_count nor run_clk are specified, use time if available,
+                    // otherwise return an error.
+                    None => match time {
+                        Some(time) => RunTestForm::Timed(time),
+                        None       => return Err(SVFParseError::InvalidRunTest(input)),
+                    },
+                };
                 Ok(Command::RunTest {
                     run_state: x.0,
-                    run_count: x.1,
-                    run_clk: x.2,
-                    min_time: x.3.map(|x| x.0),
-                    max_time: x.3.map(|x| x.1).flatten(),
-                    end_state: x.4,
+                    form,
+                    end_state: x.3,
                 })
             }
         }
@@ -571,6 +608,36 @@ fn command_trst(input: &str) -> IResult<&str, Command> {
             _        => unreachable!(),
         }
     )(input)
+}
+
+/// Parse any command.
+fn command(input: &str) -> IResult<&str, Command> {
+    alt((
+        command_enddr_endir,
+        command_frequency,
+        command_hdr_hir_tdr_tir_sdr_sir,
+        command_pio,
+        command_piomap,
+        command_runtest,
+        command_state,
+        command_trst,
+    ))(input)
+}
+
+/// Parse complete input into a vector of commands.
+///
+/// Returns an error if the input could not be fully parsed.
+pub fn parse(input: &str) -> Result<Vec<Command>, SVFParseError<&str>> {
+    all_consuming(terminated(
+        many0(complete(preceded(ws0, command))),
+        ws0_complete,
+    ))(input)
+        .map(|(_, commands)| commands)
+        .map_err(|e| match e {
+            nom::Err::Error(e)   => e,
+            nom::Err::Failure(e) => e,
+            _                    => unreachable!(),
+        })
 }
 
 #[cfg(test)]
@@ -882,10 +949,11 @@ mod tests {
             command_runtest("RUNTEST 1000 TCK ENDSTATE DRPAUSE;"),
             Ok(("", Command::RunTest {
                 run_state: None,
-                run_count: Some(1000),
-                run_clk: Some(RunClock::TCK),
-                min_time: None,
-                max_time: None,
+                form: RunTestForm::Clocked {
+                    run_count: 1000,
+                    run_clk: RunClock::TCK,
+                    time: None,
+                },
                 end_state: Some(State::DRPAUSE),
             }))
         );
@@ -893,10 +961,11 @@ mod tests {
             command_runtest("RUNTEST 20 SCK;"),
             Ok(("", Command::RunTest {
                 run_state: None,
-                run_count: Some(20),
-                run_clk: Some(RunClock::SCK),
-                min_time: None,
-                max_time: None,
+                form: RunTestForm::Clocked {
+                    run_count: 20,
+                    run_clk: RunClock::SCK,
+                    time: None,
+                },
                 end_state: None,
             }))
         );
@@ -904,10 +973,11 @@ mod tests {
             command_runtest("RUNTEST 1000000 TCK 1 SEC;"),
             Ok(("", Command::RunTest {
                 run_state: None,
-                run_count: Some(1000000),
-                run_clk: Some(RunClock::TCK),
-                min_time: Some(1.0),
-                max_time: None,
+                form: RunTestForm::Clocked {
+                    run_count: 1000000,
+                    run_clk: RunClock::TCK,
+                    time: Some(RunTestTime { min: 1.0, max: None }),
+                },
                 end_state: None,
             }))
         );
@@ -915,10 +985,10 @@ mod tests {
             command_runtest("RUNTEST 10.0E-3 SEC MAXIMUM 50.0E-3 SEC ENDSTATE IDLE;"),
             Ok(("", Command::RunTest {
                 run_state: None,
-                run_count: None,
-                run_clk: None,
-                min_time: Some(10e-3),
-                max_time: Some(50e-3),
+                form: RunTestForm::Timed(RunTestTime {
+                    min: 10e-3,
+                    max: Some(50e-3),
+                }),
                 end_state: Some(State::IDLE),
             }))
         );
@@ -926,10 +996,10 @@ mod tests {
             command_runtest("RUNTEST DRPAUSE 50E-3 SEC ENDSTATE IDLE;"),
             Ok(("", Command::RunTest {
                 run_state: Some(State::DRPAUSE),
-                run_count: None,
-                run_clk: None,
-                min_time: Some(50e-3),
-                max_time: None,
+                form: RunTestForm::Timed(RunTestTime {
+                    min: 50e-3,
+                    max: None,
+                }),
                 end_state: Some(State::IDLE),
             }))
         );
@@ -937,10 +1007,10 @@ mod tests {
             command_runtest("RUNTEST 1 SEC;"),
             Ok(("", Command::RunTest {
                 run_state: None,
-                run_count: None,
-                run_clk: None,
-                min_time: Some(1.0),
-                max_time: None,
+                form: RunTestForm::Timed(RunTestTime {
+                    min: 1.0,
+                    max: None,
+                }),
                 end_state: None,
             }))
         );
@@ -948,10 +1018,10 @@ mod tests {
             command_runtest("RUNTEST IDLE 1E-2 SEC;"),
             Ok(("", Command::RunTest {
                 run_state: Some(State::IDLE),
-                run_count: None,
-                run_clk: None,
-                min_time: Some(1e-2),
-                max_time: None,
+                form: RunTestForm::Timed(RunTestTime {
+                    min: 1e-2,
+                    max: None,
+                }),
                 end_state: None,
             }))
         );
@@ -959,7 +1029,7 @@ mod tests {
 
     #[test]
     fn test_command_state() {
-        use crate::State::*;
+        use State::*;
         assert_eq!(
             command_state("STATE IDLE;"),
             Ok(("", Command::State { path: None, end: IDLE })),
@@ -979,10 +1049,33 @@ mod tests {
 
     #[test]
     fn test_command_trst() {
-        use crate::TRSTMode::*;
+        use TRSTMode::*;
         assert_eq!(command_trst("TRST ON;"), Ok(("", Command::TRST(On))));
         assert_eq!(command_trst("TRST off;"), Ok(("", Command::TRST(Off))));
         assert_eq!(command_trst("TRST    z  ;"), Ok(("", Command::TRST(Z))));
         assert_eq!(command_trst("TRST absent;"), Ok(("", Command::TRST(Absent))));
+    }
+
+    #[test]
+    fn test_command() {
+        assert_eq!(command("TRST ON;"), Ok(("", Command::TRST(TRSTMode::On))));
+        assert_eq!(command("FREQUENCY;"), Ok(("", Command::Frequency(None))));
+    }
+
+    #[test]
+    fn test_parse() {
+        assert_eq!(
+            parse("ENDDR IDLE; FREQUENCY; SDR 1 TDI (0);"),
+            Ok(vec![
+                Command::EndDR(State::IDLE),
+                Command::Frequency(None),
+                Command::SDR(Pattern {
+                    length: 1,
+                    tdi: Some(vec![0]),
+                    tdo: None, mask: None, smask: None,
+                }),
+            ])
+        );
+        assert_eq!(parse(" ENDDR IDLE; //x\n\n"), Ok(vec![Command::EndDR(State::IDLE)]));
     }
 }
