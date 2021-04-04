@@ -5,6 +5,7 @@
 //!
 //! Parse SVF files.
 
+mod display;
 mod parser;
 pub use parser::{parse, SVFParseError as ParseError};
 
