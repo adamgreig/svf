@@ -29,46 +29,46 @@ use super::{
 /// Each error contains the input that caused the error and
 /// potentially other relevant metadata.
 #[derive(Clone, Debug, PartialEq, Error)]
-pub enum SVFParseError<I: std::fmt::Debug> {
-    #[error("Could not parse f64 from real number")]
-    InvalidF64(I),
-    #[error("Could not parse u32 from decimal number")]
-    InvalidU32(I),
-    #[error("Invalid PIO map indices specified")]
-    BadPIOMapIndices(I),
-    #[error("State '{1:?}' is not a stable state")]
-    NotStableState(I, State),
-    #[error("RunTest command has invalid arguments")]
-    InvalidRunTest(I),
+pub enum SVFParseError<'a> {
+    #[error("Could not parse f64 from real number near {:?}", &.0[..32])]
+    InvalidF64(&'a str),
+    #[error("Could not parse u32 from decimal number near {:?}", &.0[..32])]
+    InvalidU32(&'a str),
+    #[error("Invalid PIO map indices specified near {:?}", &.0[..32])]
+    BadPIOMapIndices(&'a str),
+    #[error("State '{1:?}' is not a stable state near {:?}", &.0[..32])]
+    NotStableState(&'a str, State),
+    #[error("RunTest command has invalid arguments near {:?}", &.0[..32])]
+    InvalidRunTest(&'a str),
     #[error("Incomplete data - retry with at least {1} more bytes of data")]
-    Incomplete(I, usize),
-    #[error("Parser error: {1:?}")]
-    Parser(I, String),
+    Incomplete(&'a str, usize),
+    #[error("Parser error type {1:?} near {:?}", &.0[..32])]
+    Parser(&'a str, String),
 }
 
-impl<I: std::fmt::Debug> ParseError<I> for SVFParseError<I> {
-    fn from_error_kind(input: I, kind: ErrorKind) -> Self {
+impl<'a> ParseError<&'a str> for SVFParseError<'a> {
+    fn from_error_kind(input: &'a str, kind: ErrorKind) -> Self {
         SVFParseError::Parser(input, kind.description().to_string())
     }
-    fn append(_: I, _: ErrorKind, other: Self) -> Self {
+    fn append(_: &'a str, _: ErrorKind, other: Self) -> Self {
         other
     }
 }
 
-impl<I: std::fmt::Debug> From<(I, ErrorKind)> for SVFParseError<I> {
-    fn from((i, kind): (I, ErrorKind)) -> Self {
+impl<'a> From<(&'a str, ErrorKind)> for SVFParseError<'a> {
+    fn from((i, kind): (&'a str, ErrorKind)) -> Self {
         SVFParseError::Parser(i, kind.description().to_string())
     }
 }
 
-impl<I: std::fmt::Debug> FromExternalError<I, SVFParseError<I>> for SVFParseError<I> {
-    fn from_external_error(_: I, _: ErrorKind, e: SVFParseError<I>) -> Self {
+impl<'a, I: std::fmt::Debug> FromExternalError<I, SVFParseError<'a>> for SVFParseError<'a> {
+    fn from_external_error(_: I, _: ErrorKind, e: SVFParseError<'a>) -> Self {
         e
     }
 }
 
 /// Type alias IResult to use SVFParseError by default.
-type IResult<I, O, E = SVFParseError<I>> = Result<(I, O), nom::Err<E>>;
+type IResult<'a, I, O, E = SVFParseError<'a>> = Result<(I, O), nom::Err<E>>;
 
 /// Parse a comment, which starts with `//` or `!` and finishes at an end-of-line.
 ///
@@ -627,7 +627,7 @@ fn command(input: &str) -> IResult<&str, Command> {
 /// Parse complete input into a vector of commands.
 ///
 /// Returns an error if the input could not be fully parsed.
-pub fn parse(input: &str) -> Result<Vec<Command>, SVFParseError<&str>> {
+pub fn parse(input: &str) -> Result<Vec<Command>, SVFParseError> {
     all_consuming(terminated(
         many0(complete(preceded(ws0, command))),
         ws0_complete,

@@ -8,7 +8,7 @@ fn main() {
     let contents = fs::read_to_string(filename).unwrap();
     let commands = match parse(&contents) {
         Ok(commands) => commands,
-        Err(e)       => panic!("Error parsing: {:?}", e),
+        Err(e)       => panic!("Error parsing: {}", e),
     };
     for cmd in commands.iter() {
         println!("{}", cmd);

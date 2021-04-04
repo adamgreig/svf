@@ -4,6 +4,10 @@
 //! # svf
 //!
 //! Parse SVF files.
+//!
+//! Use [`parse`] to parse a full SVF file into a vector of [`Command`],
+//! or construct [`Command`] manually and use their Display trait implementation
+//! to generate SVF files.
 
 mod display;
 mod parser;
