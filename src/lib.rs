@@ -5,7 +5,8 @@
 //!
 //! Parse SVF files.
 
-pub mod parser;
+mod parser;
+pub use parser::{parse, SVFParseError as ParseError};
 
 /// IEEE 1149.1 TAP states with SVF TAP state names.
 #[derive(Copy, Clone, Debug, PartialEq)]

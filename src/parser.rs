@@ -68,7 +68,7 @@ impl<I: std::fmt::Debug> FromExternalError<I, SVFParseError<I>> for SVFParseErro
 }
 
 /// Type alias IResult to use SVFParseError by default.
-pub type IResult<I, O, E = SVFParseError<I>> = Result<(I, O), nom::Err<E>>;
+type IResult<I, O, E = SVFParseError<I>> = Result<(I, O), nom::Err<E>>;
 
 /// Parse a comment, which starts with `//` or `!` and finishes at an end-of-line.
 ///
@@ -433,7 +433,7 @@ fn command_enddr_endir(input: &str) -> IResult<&str, Command> {
 fn command_frequency(input: &str) -> IResult<&str, Command> {
     map(delimited(
         tag_no_case("FREQUENCY"),
-        opt(delimited(ws1, real, preceded(ws1, tag_no_case("HZ")))),
+        opt(delimited(ws1, real, preceded(ws0, tag_no_case("HZ")))),
         preceded(ws0, nom_char(';')),
     ), |f| Command::Frequency(f))(input)
 }
@@ -865,6 +865,8 @@ mod tests {
                    Ok(("", Command::Frequency(Some(1e5)))));
         assert_eq!(command_frequency("FREQUENCY;"),
                    Ok(("", Command::Frequency(None))));
+        assert_eq!(command_frequency("FREQUENCY 1000000Hz;"),
+                   Ok(("", Command::Frequency(Some(1e6)))));
     }
 
     #[test]
