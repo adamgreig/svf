@@ -2,7 +2,7 @@ use thiserror::Error;
 use nom::{
     branch::{alt, permutation},
     bytes::streaming::{tag, tag_no_case, is_a},
-    combinator::{complete, all_consuming, opt, recognize, success, map, map_res},
+    combinator::{complete, all_consuming, opt, recognize, success, map, map_res, cut},
     character::streaming::{
         char as nom_char, hex_digit1, line_ending, not_line_ending, digit1, multispace1, alpha1,
     },
@@ -243,7 +243,7 @@ fn piomap_idx(input: Span) -> IResult<Span, Vec<(PIOMapDirection, String)>> {
     v.sort_unstable_by_key(|(idx, _)| *idx);
     for (iter_idx, (col_idx, _)) in v.iter().enumerate() {
         if *col_idx as usize != iter_idx + 1 {
-            return Err(nom::Err::Error(SVFParseError::BadPIOMapIndices(input.into())));
+            return Err(nom::Err::Failure(SVFParseError::BadPIOMapIndices(input.into())));
         }
     }
 
@@ -270,8 +270,8 @@ fn real(input: Span) -> IResult<Span, f64> {
             ))
         ),
         |float_str: Span| match float_str.parse::<f64>() {
-            Ok(f)  => Ok(f),
-            Err(_) => Err(SVFParseError::InvalidF64(input.into())),
+            Ok(f) if f.is_finite() => Ok(f),
+            _ => Err(SVFParseError::InvalidF64(input.into())),
         }
     )(input)
 }
@@ -280,10 +280,8 @@ fn real(input: Span) -> IResult<Span, f64> {
 fn decimal(input: Span) -> IResult<Span, u32> {
     map_res(
         digit1,
-        |decimal_str: Span| match decimal_str.parse::<u32>() {
-            Ok(d)  => Ok(d),
-            Err(_) => Err(SVFParseError::InvalidU32(input.into())),
-        }
+        |decimal_str: Span| decimal_str.parse::<u32>()
+                                       .map_err(|_| SVFParseError::InvalidU32(input.into()))
     )(input)
 }
 
@@ -438,10 +436,10 @@ fn command_enddr_endir(input: Span) -> IResult<Span, Command> {
     map_res(
         tuple((
             terminated(alt((tag_no_case("ENDDR"), tag_no_case("ENDIR"))), ws1),
-            terminated(
+            cut(terminated(
                 delimited(ws0, state, ws0),
                 nom_char(';'),
-            ),
+            )),
         )),
         |(c, s)| if !s.is_stable() {
             Err(SVFParseError::NotStableState(input.into(), s))
@@ -459,8 +457,8 @@ fn command_enddr_endir(input: Span) -> IResult<Span, Command> {
 fn command_frequency(input: Span) -> IResult<Span, Command> {
     map(delimited(
         tag_no_case("FREQUENCY"),
-        opt(delimited(ws1, real, preceded(ws0, tag_no_case("HZ")))),
-        preceded(ws0, nom_char(';')),
+        cut(opt(delimited(ws1, cut(real), preceded(ws0, tag_no_case("HZ"))))),
+        cut(preceded(ws0, nom_char(';'))),
     ), |f| Command::Frequency(f))(input)
 }
 
@@ -476,10 +474,10 @@ fn command_hdr_hir_tdr_tir_sdr_sir(input: Span) -> IResult<Span, Command> {
                 tag_no_case("SDR"),
                 tag_no_case("SIR"),
             )), ws1),
-            terminated(
+            cut(terminated(
                 delimited(ws0, pattern, ws0),
                 nom_char(';'),
-            ),
+            )),
         )),
         |(c, p)| match c.to_ascii_uppercase().as_str() {
             "HDR" => Command::HDR(p),
@@ -497,8 +495,8 @@ fn command_hdr_hir_tdr_tir_sdr_sir(input: Span) -> IResult<Span, Command> {
 fn command_pio(input: Span) -> IResult<Span, Command> {
     map(delimited(
         terminated(tag_no_case("PIO"), ws1),
-        delimited(ws0, vector_string, ws0),
-        nom_char(';'),
+        cut(delimited(ws0, vector_string, ws0)),
+        cut(nom_char(';')),
     ), |vs| Command::PIO(vs))(input)
 }
 
@@ -507,8 +505,8 @@ fn command_piomap(input: Span) -> IResult<Span, Command> {
     map(
         delimited(
             terminated(tag_no_case("PIOMAP"), ws1),
-            delimited(ws0, alt((piomap_dir, piomap_idx)), ws0),
-            nom_char(';'),
+            cut(delimited(ws0, alt((piomap_dir, piomap_idx)), ws0)),
+            cut(nom_char(';')),
         ),
         |v| Command::PIOMap(v),
     )(input)
@@ -522,7 +520,7 @@ fn command_runtest(input: Span) -> IResult<Span, Command> {
             // Match either form of command:
             // 1) [run_state] run_count run_clk [min_time [max_time]] [end_state]
             // 2) [run_state] None      None     min_time [max_time]  [end_state]
-            alt((
+            cut(alt((
                 tuple((
                     opt(terminated(state, ws1)),
                     map(tuple((
@@ -533,7 +531,7 @@ fn command_runtest(input: Span) -> IResult<Span, Command> {
                         delimited(ws1, real, preceded(ws1, tag_no_case("SEC"))),
                         opt(delimited(
                             delimited(ws1, tag_no_case("MAXIMUM"), ws1),
-                            real,
+                            cut(real),
                             preceded(ws1, tag_no_case("SEC"))
                         )),
                     ))),
@@ -543,17 +541,17 @@ fn command_runtest(input: Span) -> IResult<Span, Command> {
                     opt(terminated(state, ws1)),
                     success(None),
                     map(tuple((
-                        terminated(real, preceded(ws1, tag_no_case("SEC"))),
+                        terminated(cut(real), preceded(ws1, tag_no_case("SEC"))),
                         opt(delimited(
                             delimited(ws1, tag_no_case("MAXIMUM"), ws1),
-                            real,
+                            cut(real),
                             preceded(ws1, tag_no_case("SEC"))
                         )),
                     )), |x| Some(x)),
                     opt(preceded(delimited(ws1, tag_no_case("ENDSTATE"), ws1), state)),
                 )),
-            )),
-            preceded(ws0, nom_char(';')),
+            ))),
+            cut(preceded(ws0, nom_char(';'))),
         ),
         |x| {
             // Check the run and end states, if specified, are stable states.
@@ -594,8 +592,8 @@ fn command_state(input: Span) -> IResult<Span, Command> {
     map_res(
         delimited(
             terminated(tag_no_case("STATE"), ws1),
-            terminated(separated_list1(ws1, state), ws0),
-            nom_char(';'),
+            cut(terminated(separated_list1(ws1, state), ws0)),
+            cut(nom_char(';')),
         ),
         |mut path| {
             let end = path.pop().expect("Internal error: no end state found");
@@ -615,7 +613,7 @@ fn command_trst(input: Span) -> IResult<Span, Command> {
     map(
         delimited(
             terminated(tag_no_case("TRST"), ws1),
-            terminated(
+            cut(terminated(
                 alt((
                     tag_no_case("ON"),
                     tag_no_case("OFF"),
@@ -623,8 +621,8 @@ fn command_trst(input: Span) -> IResult<Span, Command> {
                     tag_no_case("ABSENT"),
                 )),
                 ws0
-            ),
-            nom_char(';'),
+            )),
+            cut(nom_char(';')),
         ),
         |mode| match mode.to_ascii_uppercase().as_str() {
             "ON"     => Command::TRST(TRSTMode::On),
