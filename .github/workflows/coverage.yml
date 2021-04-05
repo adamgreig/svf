@@ -1,0 +1,25 @@
+name: Coverage
+
+on:
+  - push
+  - pull_request
+
+jobs:
+  coverage:
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - name: Install Tarpaulin
+        uses: actions-rs/install@v0.1
+        with:
+          crate: cargo-tarpaulin
+      - name: Collect coverage
+        uses: actions-rs/cargo@v1
+        with:
+          command: tarpaulin
+          args: --verbose --coveralls ${{ secrets.COVERALLS_TOKEN }}
