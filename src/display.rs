@@ -1,3 +1,6 @@
+// Copyright 2021 Adam Greig
+// Licensed under the MIT license.
+
 #![allow(clippy::write_with_newline)]
 
 use std::fmt;
