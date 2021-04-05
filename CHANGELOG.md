@@ -12,5 +12,6 @@
 
 * Initial release.
 
-[Unreleased]: https://github.com/adamgreig/svf/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/adamgreig/svf/compare/v0.2.0...HEAD
+[v0.2.0]: https://github.com/adamgreig/svf/compare/v0.1.0...v0.2.0
 [v0.1.0]: https://github.com/adamgreig/svf/tree/v0.1.0
