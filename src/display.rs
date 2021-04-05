@@ -125,14 +125,14 @@ impl fmt::Display for Command {
                 for c in v.iter() {
                     c.fmt(f)?;
                 }
-                write!(f, ");\n")
+                write!(f, ");")
             },
             Command::PIOMap(v) => {
                 write!(f, "PIOMAP (\n")?;
                 for (dir, name) in v.iter() {
                     write!(f, "    {} {}\n", dir, name)?;
                 }
-                write!(f, ");\n")
+                write!(f, ");")
             },
             Command::RunTest { run_state, form, end_state } => {
                 write!(f, "RUNTEST")?;
@@ -141,7 +141,7 @@ impl fmt::Display for Command {
                 }
                 write!(f, " {}", form)?;
                 if let Some(s) = end_state {
-                    write!(f, " {}", s)?;
+                    write!(f, " ENDSTATE {}", s)?;
                 }
                 write!(f, ";")
             },
@@ -160,5 +160,42 @@ impl fmt::Display for Command {
             Command::TIR(pattern) => write!(f, "TIR {};", pattern),
             Command::TRST(mode) => write!(f, "TRST {};", mode),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::parse_complete;
+
+    #[test]
+    fn test_display_roundtrip() {
+        let svf = "\
+ENDDR IDLE;
+ENDIR IDLE;
+FREQUENCY;
+FREQUENCY 1E3 HZ;
+HDR 0;
+HIR 8 TDI (AA);
+PIO (HLZUDX);
+PIOMAP (
+    IN A
+    OUT B
+    INOUT C
+    IN D
+    OUT E
+    INOUT F
+);
+RUNTEST IDLE 100 SCK 1E0 SEC MAXIMUM 1E0 SEC ENDSTATE IDLE;
+RUNTEST IDLE 1E0 SEC;
+SDR 16 TDI (AAAA) TDO (5555) MASK (1234) SMASK (ABCD);
+SIR 0;
+STATE IDLE RESET DRPAUSE;
+TDR 0;
+TIR 0;
+TRST ON;
+";
+        let commands = parse_complete(svf).unwrap();
+        let display = commands.iter().map(|c| format!("{}\n", c)).collect::<String>();
+        assert_eq!(svf, display);
     }
 }
