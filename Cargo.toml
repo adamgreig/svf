@@ -9,6 +9,7 @@ license = "MIT"
 
 [dependencies]
 nom = "6.1"
+nom_locate = "3.0"
 thiserror = "1.0"
 log = "0.4"
 

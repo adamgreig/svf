@@ -11,6 +11,7 @@ use nom::{
     sequence::{delimited, preceded, terminated, tuple},
     error::{ErrorKind, ParseError, FromExternalError},
 };
+use nom_locate::LocatedSpan;
 
 use super::{
     Command,
@@ -24,56 +25,80 @@ use super::{
     VectorChar,
 };
 
+// Alias Span for brevity.
+type Span<'a> = LocatedSpan<&'a str>;
+
+/// Location of a parsing error in the SVF file.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct ErrLoc {
+    /// Line number where parsing error occurred.
+    line: usize,
+    /// Column number where parsing error occurred.
+    col: usize,
+}
+
+impl<'a> std::convert::From<Span<'a>> for ErrLoc {
+    fn from(span: Span<'a>) -> Self {
+        ErrLoc { line: span.location_line() as usize, col: span.get_column() }
+    }
+}
+
+impl std::fmt::Display for ErrLoc {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "L{}:{}", self.line, self.col)
+    }
+}
+
 /// SVF parse error.
 ///
 /// Each error contains the input that caused the error and
 /// potentially other relevant metadata.
 #[derive(Clone, Debug, PartialEq, Error)]
-pub enum SVFParseError<'a> {
-    #[error("Could not parse f64 from real number near {:?}", &.0[..32])]
-    InvalidF64(&'a str),
-    #[error("Could not parse u32 from decimal number near {:?}", &.0[..32])]
-    InvalidU32(&'a str),
-    #[error("Invalid PIO map indices specified near {:?}", &.0[..32])]
-    BadPIOMapIndices(&'a str),
-    #[error("State '{1:?}' is not a stable state near {:?}", &.0[..32])]
-    NotStableState(&'a str, State),
-    #[error("RunTest command has invalid arguments near {:?}", &.0[..32])]
-    InvalidRunTest(&'a str),
-    #[error("Incomplete data - retry with at least {1} more bytes of data")]
-    Incomplete(&'a str, usize),
-    #[error("Parser error type {1:?} near {:?}", &.0[..32])]
-    Parser(&'a str, String),
+pub enum SVFParseError {
+    #[error("Could not parse f64 from real number at {0}")]
+    InvalidF64(ErrLoc),
+    #[error("Could not parse u32 from decimal number at {0}")]
+    InvalidU32(ErrLoc),
+    #[error("Invalid PIO map indices specified at {0}")]
+    BadPIOMapIndices(ErrLoc),
+    #[error("State '{1:?}' is not a stable state at {0}")]
+    NotStableState(ErrLoc, State),
+    #[error("RunTest command has invalid arguments at {0}")]
+    InvalidRunTest(ErrLoc),
+    #[error("Incomplete data at {0}: retry with at least {1} more bytes of data")]
+    Incomplete(ErrLoc, usize),
+    #[error("Parser error type {1:?} at {0}")]
+    Parser(ErrLoc, String),
 }
 
-impl<'a> ParseError<&'a str> for SVFParseError<'a> {
-    fn from_error_kind(input: &'a str, kind: ErrorKind) -> Self {
-        SVFParseError::Parser(input, kind.description().to_string())
+impl<'a> ParseError<Span<'a>> for SVFParseError {
+    fn from_error_kind(input: Span<'a>, kind: ErrorKind) -> Self {
+        SVFParseError::Parser(input.into(), kind.description().to_string())
     }
-    fn append(_: &'a str, _: ErrorKind, other: Self) -> Self {
+    fn append(_: Span<'a>, _: ErrorKind, other: Self) -> Self {
         other
     }
 }
 
-impl<'a> From<(&'a str, ErrorKind)> for SVFParseError<'a> {
-    fn from((i, kind): (&'a str, ErrorKind)) -> Self {
-        SVFParseError::Parser(i, kind.description().to_string())
+impl<'a> From<(Span<'a>, ErrorKind)> for SVFParseError {
+    fn from((i, kind): (Span<'a>, ErrorKind)) -> Self {
+        SVFParseError::Parser(i.into(), kind.description().to_string())
     }
 }
 
-impl<'a, I: std::fmt::Debug> FromExternalError<I, SVFParseError<'a>> for SVFParseError<'a> {
-    fn from_external_error(_: I, _: ErrorKind, e: SVFParseError<'a>) -> Self {
+impl<I: std::fmt::Debug> FromExternalError<I, SVFParseError> for SVFParseError {
+    fn from_external_error(_: I, _: ErrorKind, e: SVFParseError) -> Self {
         e
     }
 }
 
 /// Type alias IResult to use SVFParseError by default.
-type IResult<'a, I, O, E = SVFParseError<'a>> = Result<(I, O), nom::Err<E>>;
+type IResult<I, O, E = SVFParseError> = Result<(I, O), nom::Err<E>>;
 
 /// Parse a comment, which starts with `//` or `!` and finishes at an end-of-line.
 ///
 /// Returns the string contents of the comment.
-fn comment(input: &str) -> IResult<&str, &str> {
+fn comment(input: Span) -> IResult<Span, Span> {
     delimited(alt((tag("//"), tag("!"))),
               not_line_ending,
               line_ending,
@@ -81,7 +106,7 @@ fn comment(input: &str) -> IResult<&str, &str> {
 }
 
 /// Consume any amount of comments or whitespace.
-fn ws0(input: &str) -> IResult<&str, &str> {
+fn ws0(input: Span) -> IResult<Span, Span> {
     recognize(many0_count(alt((comment, multispace1))))(input)
 }
 
@@ -89,12 +114,12 @@ fn ws0(input: &str) -> IResult<&str, &str> {
 ///
 /// This method will consume all whitespace to the end of the input,
 /// but not then return Incomplete suggesting more could potentially be read.
-fn ws0_complete(input: &str) -> IResult<&str, &str> {
+fn ws0_complete(input: Span) -> IResult<Span, Span> {
     recognize(many0_count(complete(alt((comment, multispace1_complete)))))(input)
 }
 
 /// Consume at least some comments or whitespace.
-fn ws1(input: &str) -> IResult<&str, &str> {
+fn ws1(input: Span) -> IResult<Span, Span> {
     recognize(many1_count(alt((comment, multispace1))))(input)
 }
 
@@ -104,13 +129,14 @@ fn ws1(input: &str) -> IResult<&str, &str> {
 ///
 /// Returns the parsed data as a `Vec<u8>`, least significant byte first,
 /// with any leading 0s stripped out.
-fn scandata(input: &str) -> IResult<&str, Vec<u8>> {
+fn scandata(input: Span) -> IResult<Span, Vec<u8>> {
     let (i, hex) = delimited(
         nom_char('('),
         many1(delimited(ws0, hex_digit1, ws0)),
         nom_char(')')
     )(input)?;
-    let chars: Vec<char> = hex.join("").trim_start_matches('0').chars().collect();
+    let chars: String = hex.iter().map(|h| *h.fragment()).collect();
+    let chars: Vec<char> = chars.trim_start_matches('0').chars().collect();
     let data = chars.rchunks(2).map(|nibbles| {
         let word = nibbles.iter().collect::<String>();
         u8::from_str_radix(&word, 16).expect("Internal error parsing hexadecimal number")
@@ -124,7 +150,7 @@ fn scandata(input: &str) -> IResult<&str, Vec<u8>> {
 /// Any comments or whitespace inside the brackets are ignored.
 ///
 /// Returns the parsed data as a `Vec<VectorChar>`.
-fn vector_string(input: &str) -> IResult<&str, Vec<VectorChar>> {
+fn vector_string(input: Span) -> IResult<Span, Vec<VectorChar>> {
     map(
         delimited(
             nom_char('('),
@@ -150,13 +176,13 @@ fn vector_string(input: &str) -> IResult<&str, Vec<VectorChar>> {
     )(input)
 }
 
-fn logical_name(input: &str) -> IResult<&str, &str> {
+fn logical_name(input: Span) -> IResult<Span, Span> {
     recognize(preceded(alpha1, many0(alt((alpha1, digit1, is_a("_"))))))(input)
 }
 
 /// Parse the direction form of PIOMAP column descriptions, where each column
 /// is listed in order and given a direction and name.
-fn piomap_dir(input: &str) -> IResult<&str, Vec<(PIOMapDirection, String)>> {
+fn piomap_dir(input: Span) -> IResult<Span, Vec<(PIOMapDirection, String)>> {
     map(
         delimited(
             nom_char('('),
@@ -173,7 +199,7 @@ fn piomap_dir(input: &str) -> IResult<&str, Vec<(PIOMapDirection, String)>> {
             ),
             nom_char(')'),
         ),
-        |v| v.iter().map(|(dirn, name)| match *dirn {
+        |v| v.iter().map(|(dirn, name)| match *dirn.fragment() {
             "IN"    => (PIOMapDirection::In, name.to_string()),
             "OUT"   => (PIOMapDirection::Out, name.to_string()),
             "INOUT" => (PIOMapDirection::InOut, name.to_string()),
@@ -187,9 +213,9 @@ fn piomap_dir(input: &str) -> IResult<&str, Vec<(PIOMapDirection, String)>> {
 ///
 /// Returns the same `Vec<(PIOMapDirection, String)>` as `piomap_dir`; the indices
 /// are used to order the vector of names and missing signals are filled in.
-fn piomap_idx(input: &str) -> IResult<&str, Vec<(PIOMapDirection, String)>> {
+fn piomap_idx(input: Span) -> IResult<Span, Vec<(PIOMapDirection, String)>> {
     // First parse the input to a vec of the specified (u32, String).
-    let (i, mut v): (&str, Vec<(u32, String)>) = map(
+    let (i, mut v): (Span, Vec<(u32, String)>) = map(
         delimited(
             nom_char('('),
             delimited(
@@ -217,7 +243,7 @@ fn piomap_idx(input: &str) -> IResult<&str, Vec<(PIOMapDirection, String)>> {
     v.sort_unstable_by_key(|(idx, _)| *idx);
     for (iter_idx, (col_idx, _)) in v.iter().enumerate() {
         if *col_idx as usize != iter_idx + 1 {
-            return Err(nom::Err::Error(SVFParseError::BadPIOMapIndices(input)));
+            return Err(nom::Err::Error(SVFParseError::BadPIOMapIndices(input.into())));
         }
     }
 
@@ -231,7 +257,7 @@ fn piomap_idx(input: &str) -> IResult<&str, Vec<(PIOMapDirection, String)>> {
 /// where `digits` is one or more of the characters 0-9.
 ///
 /// Returns the parsed real number as an f64.
-fn real(input: &str) -> IResult<&str, f64> {
+fn real(input: Span) -> IResult<Span, f64> {
     map_res(
         recognize(
             tuple((
@@ -243,20 +269,20 @@ fn real(input: &str) -> IResult<&str, f64> {
                 )),
             ))
         ),
-        |float_str: &str| match float_str.parse::<f64>() {
+        |float_str: Span| match float_str.parse::<f64>() {
             Ok(f)  => Ok(f),
-            Err(_) => Err(SVFParseError::InvalidF64(input)),
+            Err(_) => Err(SVFParseError::InvalidF64(input.into())),
         }
     )(input)
 }
 
 /// Parse an unsigned 32-bit decimal integer.
-fn decimal(input: &str) -> IResult<&str, u32> {
+fn decimal(input: Span) -> IResult<Span, u32> {
     map_res(
         digit1,
-        |decimal_str: &str| match decimal_str.parse::<u32>() {
+        |decimal_str: Span| match decimal_str.parse::<u32>() {
             Ok(d)  => Ok(d),
-            Err(_) => Err(SVFParseError::InvalidU32(input)),
+            Err(_) => Err(SVFParseError::InvalidU32(input.into())),
         }
     )(input)
 }
@@ -264,7 +290,7 @@ fn decimal(input: &str) -> IResult<&str, u32> {
 /// Parse one of the states.
 ///
 /// Parsing is case insensitive. The corresponding State variant is returned.
-fn state(input: &str) -> IResult<&str, State> {
+fn state(input: Span) -> IResult<Span, State> {
     map(
         alt((
             tag_no_case("RESET"),
@@ -284,7 +310,7 @@ fn state(input: &str) -> IResult<&str, State> {
             tag_no_case("IREXIT2"),
             tag_no_case("IRUPDATE"),
         )),
-        |s: &str| match s.to_ascii_uppercase().as_str() {
+        |s: Span| match s.to_ascii_uppercase().as_str() {
             "RESET"     => State::RESET,
             "IDLE"      => State::IDLE,
             "DRSELECT"  => State::DRSELECT,
@@ -307,10 +333,10 @@ fn state(input: &str) -> IResult<&str, State> {
 }
 
 /// Parse a run_clk option, either TCK or SCK.
-fn run_clk(input: &str) -> IResult<&str, RunClock> {
+fn run_clk(input: Span) -> IResult<Span, RunClock> {
     map(
         alt((tag_no_case("TCK"), tag_no_case("SCK"))),
-        |s: &str| match s.to_ascii_uppercase().as_str() {
+        |s: Span| match s.to_ascii_uppercase().as_str() {
             "TCK" => RunClock::TCK,
             "SCK" => RunClock::SCK,
             _     => unreachable!(),
@@ -323,7 +349,7 @@ fn run_clk(input: &str) -> IResult<&str, RunClock> {
 ///
 /// Returns the parsed scandata.
 fn named_scandata<'a>(tag: &'static str)
-    -> impl FnMut(&'a str) -> IResult<&'a str, Vec<u8>>
+    -> impl FnMut(Span<'a>) -> IResult<Span<'a>, Vec<u8>>
 {
     preceded(
         terminated(
@@ -340,7 +366,7 @@ fn named_scandata<'a>(tag: &'static str)
 /// The pattern starts with the length integer.
 ///
 /// Returns a Pattern struct.
-fn pattern(input: &str) -> IResult<&str, Pattern> {
+fn pattern(input: Span) -> IResult<Span, Pattern> {
 
     /// Maps _ to a parser that always returns None, and maps literals
     /// to a delimited named_scandata with that tag, mapped to return Some(Vec<u8>).
@@ -408,7 +434,7 @@ fn pattern(input: &str) -> IResult<&str, Pattern> {
 }
 
 /// Parse the ENDDR and ENDIR commands, which specify a stable state.
-fn command_enddr_endir(input: &str) -> IResult<&str, Command> {
+fn command_enddr_endir(input: Span) -> IResult<Span, Command> {
     map_res(
         tuple((
             terminated(alt((tag_no_case("ENDDR"), tag_no_case("ENDIR"))), ws1),
@@ -418,7 +444,7 @@ fn command_enddr_endir(input: &str) -> IResult<&str, Command> {
             ),
         )),
         |(c, s)| if !s.is_stable() {
-            Err(SVFParseError::NotStableState(input, s))
+            Err(SVFParseError::NotStableState(input.into(), s))
         } else {
             match c.to_ascii_uppercase().as_str() {
                 "ENDDR" => Ok(Command::EndDR(s)),
@@ -430,7 +456,7 @@ fn command_enddr_endir(input: &str) -> IResult<&str, Command> {
 }
 
 /// Parse the FREQUENCY command, which specifies a real number frequency.
-fn command_frequency(input: &str) -> IResult<&str, Command> {
+fn command_frequency(input: Span) -> IResult<Span, Command> {
     map(delimited(
         tag_no_case("FREQUENCY"),
         opt(delimited(ws1, real, preceded(ws0, tag_no_case("HZ")))),
@@ -439,7 +465,7 @@ fn command_frequency(input: &str) -> IResult<&str, Command> {
 }
 
 /// Parse the HDR, HIR, TDR, TIR, SDR, and SIR commands, which all specify patterns.
-fn command_hdr_hir_tdr_tir_sdr_sir(input: &str) -> IResult<&str, Command> {
+fn command_hdr_hir_tdr_tir_sdr_sir(input: Span) -> IResult<Span, Command> {
     map(
         tuple((
             terminated(alt((
@@ -468,7 +494,7 @@ fn command_hdr_hir_tdr_tir_sdr_sir(input: &str) -> IResult<&str, Command> {
 }
 
 /// Parse the PIO command, which specifies a vector string.
-fn command_pio(input: &str) -> IResult<&str, Command> {
+fn command_pio(input: Span) -> IResult<Span, Command> {
     map(delimited(
         terminated(tag_no_case("PIO"), ws1),
         delimited(ws0, vector_string, ws0),
@@ -477,7 +503,7 @@ fn command_pio(input: &str) -> IResult<&str, Command> {
 }
 
 /// Parse the PIOMAP command, which specifies column names and directions for PIO.
-fn command_piomap(input: &str) -> IResult<&str, Command> {
+fn command_piomap(input: Span) -> IResult<Span, Command> {
     map(
         delimited(
             terminated(tag_no_case("PIOMAP"), ws1),
@@ -489,7 +515,7 @@ fn command_piomap(input: &str) -> IResult<&str, Command> {
 }
 
 /// Parse the RUNTEST command.
-fn command_runtest(input: &str) -> IResult<&str, Command> {
+fn command_runtest(input: Span) -> IResult<Span, Command> {
     map_res(
         delimited(
             terminated(tag_no_case("RUNTEST"), ws1),
@@ -532,9 +558,9 @@ fn command_runtest(input: &str) -> IResult<&str, Command> {
         |x| {
             // Check the run and end states, if specified, are stable states.
             if x.0.map(|x| x.is_stable()) == Some(false) {
-                Err(SVFParseError::NotStableState(input, x.0.unwrap()))
+                Err(SVFParseError::NotStableState(input.into(), x.0.unwrap()))
             } else if x.3.map(|x| x.is_stable()) == Some(false) {
-                Err(SVFParseError::NotStableState(input, x.3.unwrap()))
+                Err(SVFParseError::NotStableState(input.into(), x.3.unwrap()))
             } else {
                 // Extract the optional min_time and max_time parameters.
                 let time = x.2.map(|(min, max)| RunTestTime { min, max });
@@ -549,7 +575,7 @@ fn command_runtest(input: &str) -> IResult<&str, Command> {
                     // otherwise return an error.
                     None => match time {
                         Some(time) => RunTestForm::Timed(time),
-                        None       => return Err(SVFParseError::InvalidRunTest(input)),
+                        None       => return Err(SVFParseError::InvalidRunTest(input.into())),
                     },
                 };
                 Ok(Command::RunTest {
@@ -564,7 +590,7 @@ fn command_runtest(input: &str) -> IResult<&str, Command> {
 
 /// Parse the STATE command, which specifies a new end state and optionally
 /// the path to take to get there.
-fn command_state(input: &str) -> IResult<&str, Command> {
+fn command_state(input: Span) -> IResult<Span, Command> {
     map_res(
         delimited(
             terminated(tag_no_case("STATE"), ws1),
@@ -574,7 +600,7 @@ fn command_state(input: &str) -> IResult<&str, Command> {
         |mut path| {
             let end = path.pop().expect("Internal error: no end state found");
             if !end.is_stable() {
-                Err(SVFParseError::NotStableState(input, end))
+                Err(SVFParseError::NotStableState(input.into(), end))
             } else if path.is_empty() {
                 Ok(Command::State { path: None, end })
             } else {
@@ -585,7 +611,7 @@ fn command_state(input: &str) -> IResult<&str, Command> {
 }
 
 /// Parse the TRST command, whicih specifies the operation of the optional TRST signal.
-fn command_trst(input: &str) -> IResult<&str, Command> {
+fn command_trst(input: Span) -> IResult<Span, Command> {
     map(
         delimited(
             terminated(tag_no_case("TRST"), ws1),
@@ -611,7 +637,7 @@ fn command_trst(input: &str) -> IResult<&str, Command> {
 }
 
 /// Parse any command.
-fn command(input: &str) -> IResult<&str, Command> {
+fn command(input: Span) -> IResult<Span, Command> {
     alt((
         command_enddr_endir,
         command_frequency,
@@ -631,7 +657,7 @@ pub fn parse(input: &str) -> Result<Vec<Command>, SVFParseError> {
     all_consuming(terminated(
         many0(complete(preceded(ws0, command))),
         ws0_complete,
-    ))(input)
+    ))(Span::new(input))
         .map(|(_, commands)| commands)
         .map_err(|e| match e {
             nom::Err::Error(e)   => e,
@@ -644,93 +670,139 @@ pub fn parse(input: &str) -> Result<Vec<Command>, SVFParseError> {
 mod tests {
     use super::*;
 
+    /// Shorthand for creating a span.
+    macro_rules! s {
+        ($s:expr) => { Span::new($s) }
+    }
+
+    /// Assert that parsing the input $i with the parser $p
+    /// produces the remaining output $r and possibly an output
+    /// $o which may be a literal (compared to a span fragment)
+    /// or any other expression (compared directly to parser otuput).
+    macro_rules! assert_parse {
+        // Literal output comparison.
+        ($p:expr, $i:expr, $r:expr, $o:literal) => {
+            match $p(Span::new($i)) {
+                Ok((rem, out)) => {
+                    assert_eq!(rem.fragment(), &$r);
+                    assert_eq!(out.fragment(), &$o);
+                }
+                Err(e) => panic!("Parse failure: {:?}", e),
+            }
+        };
+
+        // Other output type comparison.
+        ($p:expr, $i:expr, $r:expr, $o:expr) => {
+            match $p(Span::new($i)) {
+                Ok((rem, out)) => {
+                    assert_eq!(rem.fragment(), &$r);
+                    assert_eq!(out, $o);
+                }
+                Err(e) => panic!("Parse failure: {:?}", e),
+            }
+        };
+
+        // Output ignored, only check leftover input.
+        ($p:expr, $i:expr, $r:expr) => {
+            match $p(Span::new($i)) {
+                Ok((rem, _)) => {
+                    assert_eq!(rem.fragment(), &$r);
+                }
+                Err(e) => panic!("Parse failure: {:?}", e),
+            }
+        };
+    }
+
+    /// Assert that parsing the input $i with the parser $p fails,
+    /// optionally checking the error against $e.
+    macro_rules! assert_parse_err {
+        ($p:expr, $i:literal) => {
+            assert!($p(Span::new($i)).is_err());
+        };
+        ($p:expr, $i:literal, $e:expr) => {
+            assert_eq!($p(Span::new($i)), Err($e));
+        };
+    }
+
     #[test]
     fn test_comment() {
-        assert_eq!(comment("// this is a comment\n"), Ok(("", " this is a comment")));
-        assert_eq!(comment("!also a comment\r\n"), Ok(("", "also a comment")));
-        assert_eq!(comment("//this!is//a!comment//too!\n"), Ok(("", "this!is//a!comment//too!")));
+        assert_parse!(comment, "// this is a comment\n", "", " this is a comment");
+        assert_parse!(comment, "!also a comment\r\n", "", "also a comment");
+        assert_parse!(comment, "//this!is//a!comment//too!\n", "", "this!is//a!comment//too!");
     }
 
     #[test]
     fn test_ws0() {
-        let (i, _) = ws0("  // comment\n   ! more comments\n\t\t\t_").unwrap();
-        assert_eq!(i, "_");
+        assert_parse!(ws0, "  // comment\n   ! more comments\n\t\t\t_", "_");
+    }
+
+    #[test]
+    fn test_ws0_complete() {
+        assert_parse!(ws0_complete, "  // comment\n   ! more comments\n\t\t\t", "");
     }
 
     #[test]
     fn test_scandata() {
         // Test leading zeros are removed.
-        assert_eq!(scandata("(0)"), Ok(("", vec![])));
-        assert_eq!(scandata("(00000)"), Ok(("", vec![])));
+        assert_parse!(scandata, "(0)", "", vec![]);
+        assert_parse!(scandata, "(0000)", "", vec![]);
 
         // Test some example hex data is parsed correctly.
-        assert_eq!(scandata("(0504030201)"), Ok(("", vec![1, 2, 3, 4, 5])));
+        assert_parse!(scandata, "(0504030201)", "", vec![1, 2, 3, 4, 5]);
 
         // Test an odd number of nibbles is parsed correctly.
-        assert_eq!(scandata("(abcde)"), Ok(("", vec![0xde, 0xbc, 0x0a])));
+        assert_parse!(scandata, "(abcde)", "", vec![0xde, 0xbc, 0x0a]);
 
         // Test interior whitespace is ignored.
-        assert_eq!(scandata("(01 02\n    03)"), Ok(("", vec![3, 2, 1])));
+        assert_parse!(scandata, "(01 02\n    03)", "", vec![3, 2, 1]);
 
         // Test interior comments are ignored.
-        assert_eq!(scandata("(01 // comment\n  02 03)"), Ok(("", vec![3, 2, 1])));
+        assert_parse!(scandata, "(01 // comment\n  02 03)", "", vec![3, 2, 1]);
 
         // Test non-hex characters are rejected.
-        assert!(scandata("(1234 x 5678)").is_err());
+        assert_parse_err!(scandata, "(1234 x 5678)");
     }
 
     #[test]
     fn test_vector_string() {
         use VectorChar::*;
-        assert_eq!(
-            vector_string("(HLUDXZHHLL)"),
-            Ok(("", vec![H, L, U, D, X, Z, H, H, L, L])),
-        );
-        assert_eq!(
-            vector_string("( H\nL!c\nU\t    D)"),
-            Ok(("", vec![H, L, U, D])),
-        );
+        assert_parse!(vector_string, "(HLUDXZHHLL)", "", vec![H, L, U, D, X, Z, H, H, L, L]);
+        assert_parse!(vector_string, "( H\nL!c\nU\t    D)", "", vec![H, L, U, D]);
     }
 
     #[test]
     fn test_logical_name() {
-        assert_eq!(logical_name("A "), Ok((" ", "A")));
-        assert_eq!(logical_name("Strobe "), Ok((" ", "Strobe")));
-        assert_eq!(logical_name("STROBE_0 "), Ok((" ", "STROBE_0")));
-        assert_eq!(logical_name("X_1_A "), Ok((" ", "X_1_A")));
-        assert!(logical_name("1A").is_err());
+        assert_parse!(logical_name, "A ", " ", "A");
+        assert_parse!(logical_name, "Strobe ", " ", "Strobe");
+        assert_parse!(logical_name, "STROBE_0 ", " ", "STROBE_0");
+        assert_parse!(logical_name, "X_1_A ", " ", "X_1_A");
+        assert_parse_err!(logical_name, "1A");
     }
 
     #[test]
     fn test_piomap_dir() {
         use PIOMapDirection::*;
-        assert_eq!(
-            piomap_dir("( )"),
-            Ok(("", vec![])),
+        assert_parse!(piomap_dir, "( )", "", vec![]);
+        assert_parse!(
+            piomap_dir, "(IN A OUT B INOUT C)",
+            "", vec![(In, "A".to_string()), (Out, "B".to_string()), (InOut, "C".to_string())]
         );
-        assert_eq!(
-            piomap_dir("(IN A OUT B INOUT C)"),
-            Ok(("", vec![(In, "A".to_string()), (Out, "B".to_string()), (InOut, "C".to_string())])),
-        );
-        assert_eq!(
-            piomap_dir("(  IN \n A OUT B // comment\n INOUT C    )"),
-            Ok(("", vec![(In, "A".to_string()), (Out, "B".to_string()), (InOut, "C".to_string())])),
+        assert_parse!(
+            piomap_dir, "(  IN \n A OUT B // comment\n INOUT C    )",
+            "", vec![(In, "A".to_string()), (Out, "B".to_string()), (InOut, "C".to_string())]
         );
     }
 
     #[test]
     fn test_piomap_idx() {
         use PIOMapDirection::*;
-        assert_eq!(
-            piomap_idx("( )"),
-            Ok(("", vec![])),
+        assert_parse!(piomap_idx, "( )", "", vec![]);
+        assert_parse!(
+            piomap_idx, "(1 A 2 B)",
+            "", vec![(InOut, "A".to_string()), (InOut, "B".to_string())]
         );
-        assert_eq!(
-            piomap_idx("(1 A 2 B)"),
-            Ok(("", vec![(InOut, "A".to_string()), (InOut, "B".to_string())])),
-        );
-        assert!(piomap_idx("(0 A 1 B)").is_err());
-        assert!(piomap_idx("(1 A 3 C)").is_err());
+        assert_parse_err!(piomap_idx, "(0 A 1 B)");
+        assert_parse_err!(piomap_idx, "(1 A 3 C)");
     }
 
     #[test]
@@ -738,63 +810,63 @@ mod tests {
         // Test a variety of number formats parse correctly.
         // We terminate each string with a space to indicate to the streaming decoders that the whole
         // number has been received, since spaces are not permitted inside numbers.
-        assert_eq!(real("123 "), Ok((" ", 123.0)));
-        assert_eq!(real("123.45 "), Ok((" ", 123.45)));
-        assert_eq!(real("123e1 "), Ok((" ", 123e1)));
-        assert_eq!(real("123E1 "), Ok((" ", 123e1)));
-        assert_eq!(real("123e+10 "), Ok((" ", 123e10)));
-        assert_eq!(real("123e-10 "), Ok((" ", 123e-10)));
-        assert_eq!(real("123.45e11 "), Ok((" ", 123.45e11)));
-        assert_eq!(real("123.45e-11 "), Ok((" ", 123.45e-11)));
+        assert_parse!(real, "123 ", " ", (123.0));
+        assert_parse!(real, "123.45 ", " ", (123.45));
+        assert_parse!(real, "123e1 ", " ", (123e1));
+        assert_parse!(real, "123E1 ", " ", (123e1));
+        assert_parse!(real, "123e+10 ", " ", (123e10));
+        assert_parse!(real, "123e-10 ", " ", (123e-10));
+        assert_parse!(real, "123.45e11 ", " ", (123.45e11));
+        assert_parse!(real, "123.45e-11 ", " ", (123.45e-11));
 
         // Test the strings the specification specifically lists as being valid .
         for n in &["1 ", "1E0 ", "1E+0 ", "1.0 ", "1.0E0 ", "1.0E+0 ", "1.0E-0 "] {
-            assert_eq!(real(n), Ok((" ", 1.0)));
+            assert_parse!(real, n, " ", (1.0));
         }
 
         // Test the strings the specification specifically lists as being invalid.
         for n in &["1. ", "1.E0 ", ".5 ", ".5E0 "] {
             // We want to either error, or only perform an incomplete parse,
             // with some remaining data that will later cause an error.
-            let result = real(n);
-            assert!(result.is_err() || result.unwrap().0 != " ");
+            let result = real(s!(n));
+            assert!(result.is_err() || result.unwrap().0 != s!(" "));
         }
     }
 
     #[test]
     fn test_decimal() {
-        assert_eq!(decimal("12345 "), Ok((" ", 12345u32)));
-        assert_eq!(decimal("00012 "), Ok((" ", 12)));
-        assert!(decimal("a1").is_err());
-        assert!(decimal("-1").is_err());
-        assert!(decimal("4294967296").is_err());
+        assert_parse!(decimal, "12345 ", " ", (12345u32));
+        assert_parse!(decimal, "00012 ", " ", (12));
+        assert_parse_err!(decimal, "a1");
+        assert_parse_err!(decimal, "-1");
+        assert_parse_err!(decimal, "4294967296");
     }
 
     #[test]
     fn test_state() {
-        assert_eq!(state("DrExiT1"),        Ok(("", State::DREXIT1)));
-        assert!(state("notastate").is_err());
+        assert_parse!(state, "DrExiT1", "", State::DREXIT1);
+        assert_parse_err!(state, "notastate");
     }
 
     #[test]
     fn test_run_clk() {
-        assert_eq!(run_clk("TCK"), Ok(("", RunClock::TCK)));
-        assert_eq!(run_clk("sck"), Ok(("", RunClock::SCK)));
-        assert!(run_clk("nck").is_err());
+        assert_parse!(run_clk, "TCK", "", RunClock::TCK);
+        assert_parse!(run_clk, "sck", "", RunClock::SCK);
+        assert_parse_err!(run_clk, "nck");
     }
 
     #[test]
     fn test_named_scandata() {
         // Test basic examples with spaces all work.
-        assert_eq!(named_scandata("TDI")("TDI (1)"), Ok(("", vec![1])));
-        assert_eq!(named_scandata("TDI")("TDI \n (\n    1\n)"), Ok(("", vec![1])));
-        assert_eq!(named_scandata("TDO")("TDO\t(\n1\n)"), Ok(("", vec![1])));
+        assert_parse!(named_scandata("TDI"), "TDI (1)", "", vec![1]);
+        assert_parse!(named_scandata("TDI"), "TDI \n (\n    1\n)", "", vec![1]);
+        assert_parse!(named_scandata("TDO"), "TDO\t(\n1\n)", "", vec![1]);
 
         // Test error on mismatched tag.
-        assert!(named_scandata("TDI")("TDO (1)").is_err());
+        assert_parse_err!(named_scandata("TDI"), "TDO (1)");
 
         // Test error with non-space characters between tag and scandata.
-        assert!(named_scandata("TDI")("TDI is (1)").is_err());
+        assert_parse_err!(named_scandata("TDI"), "TDI is (1)");
     }
 
     #[test]
@@ -802,154 +874,161 @@ mod tests {
         // Test basic examples of patterns.
         // Each example is terminated with _ to make it clear no further
         // pattern input can be received.
-        assert_eq!(
-            pattern("0_"),
-            Ok(("_", Pattern { length: 0, tdi: None, tdo: None, mask: None, smask: None }))
+        assert_parse!(
+            pattern, "0_", "_", Pattern {
+                length: 0,
+                tdi: None,
+                tdo: None,
+                mask: None,
+                smask: None,
+            }
         );
-        assert_eq!(
-            pattern("16 TDI (1)_"),
-            Ok(("_", Pattern {
+        assert_parse!(
+            pattern, "16 TDI (1)_", "_", Pattern {
                 length: 16,
                 tdi: Some(vec![1, 0]),
                 tdo: None,
                 mask: None,
-                smask: None
-            }))
+                smask: None,
+            }
         );
-        assert_eq!(
-            pattern("8 MASK (3)_"),
-            Ok(("_", Pattern {
+        assert_parse!(
+            pattern, "8 MASK (3)_", "_", Pattern {
                 length: 8,
                 tdi: None,
                 tdo: None,
                 mask: Some(vec![3]),
-                smask: None
-            }))
+                smask: None,
+            }
         );
-        assert_eq!(
-            pattern("3 TDI (1) TDO (2) MASK (3) SMASK (4)_"),
-            Ok(("_", Pattern {
+        assert_parse!(
+            pattern, "3 TDI (1) TDO (2) MASK (3) SMASK (4)_", "_", Pattern {
                 length: 3,
                 tdi: Some(vec![1]),
                 tdo: Some(vec![2]),
                 mask: Some(vec![3]),
                 smask: Some(vec![4]),
-            }))
+            }
         );
-        assert_eq!(
-            pattern("3 SMASK (4) MASK (3) TDI (1) TDO (2)_"),
-            Ok(("_", Pattern {
+        assert_parse!(
+            pattern, "3 SMASK (4) MASK (3) TDI (1) TDO (2)_", "_", Pattern {
                 length: 3,
                 tdi: Some(vec![1]),
                 tdo: Some(vec![2]),
                 mask: Some(vec![3]),
                 smask: Some(vec![4]),
-            }))
+            }
         );
     }
 
     #[test]
     fn test_command_enddr_endir() {
-        assert_eq!(command_enddr_endir("ENDDR IDLE;"),        Ok(("", Command::EndDR(State::IDLE))));
-        assert_eq!(command_enddr_endir("ENDDR DRPAUSE;"),     Ok(("", Command::EndDR(State::DRPAUSE))));
-        assert_eq!(command_enddr_endir("ENDIR RESET;"),       Ok(("", Command::EndIR(State::RESET))));
-        assert_eq!(command_enddr_endir("ENDDR \n RESET ;"),   Ok(("", Command::EndDR(State::RESET))));
-        assert_eq!(command_enddr_endir("ENDDR !c\n RESET ;"), Ok(("", Command::EndDR(State::RESET))));
+        assert_parse!(command_enddr_endir, "ENDDR IDLE;", "", Command::EndDR(State::IDLE));
+        assert_parse!(command_enddr_endir, "ENDDR DRPAUSE;", "", Command::EndDR(State::DRPAUSE));
+        assert_parse!(command_enddr_endir, "ENDIR RESET;", "", Command::EndIR(State::RESET));
+        assert_parse!(command_enddr_endir, "ENDDR \n RESET ;", "", Command::EndDR(State::RESET));
+        assert_parse!(command_enddr_endir, "ENDDR !c\n RESET ;", "", Command::EndDR(State::RESET));
     }
 
     #[test]
     fn test_command_frequency() {
-        assert_eq!(command_frequency("FREQUENCY 90e3 Hz;"),
-                   Ok(("", Command::Frequency(Some(90e3)))));
-        assert_eq!(command_frequency("FREQUENCY 1E5 Hz;"),
-                   Ok(("", Command::Frequency(Some(1e5)))));
-        assert_eq!(command_frequency("FREQUENCY;"),
-                   Ok(("", Command::Frequency(None))));
-        assert_eq!(command_frequency("FREQUENCY 1000000Hz;"),
-                   Ok(("", Command::Frequency(Some(1e6)))));
+        assert_parse!(command_frequency, "FREQUENCY 90e3 Hz;", "", Command::Frequency(Some(90e3)));
+        assert_parse!(command_frequency, "FREQUENCY 1E5 Hz;", "", Command::Frequency(Some(1e5)));
+        assert_parse!(command_frequency, "FREQUENCY;", "", Command::Frequency(None));
+        assert_parse!(command_frequency, "FREQUENCY 1000000Hz;", "", Command::Frequency(Some(1e6)));
     }
 
     #[test]
     fn test_pattern_commands() {
-        assert_eq!(
-            command_hdr_hir_tdr_tir_sdr_sir("HDR 32 TDI(00000010) TDO(81818181) MASK(FFFFFFFF) SMASK(0);"),
-            Ok(("", Command::HDR(Pattern {
+        assert_parse!(
+            command_hdr_hir_tdr_tir_sdr_sir,
+            "HDR 32 TDI(00000010) TDO(81818181) MASK(FFFFFFFF) SMASK(0);",
+            "",
+            Command::HDR(Pattern {
                length: 32,
                tdi: Some(vec![0x10, 0x00, 0x00, 0x00]),
                tdo: Some(vec![0x81, 0x81, 0x81, 0x81]),
                mask: Some(vec![0xFF, 0xFF, 0xFF, 0xFF]),
                smask: Some(vec![0x00, 0x00, 0x00, 0x00]),
-            })))
+            })
         );
-        assert_eq!(
-            command_hdr_hir_tdr_tir_sdr_sir("HIR 16 TDI(ABCD);"),
-            Ok(("", Command::HIR(Pattern {
+        assert_parse!(
+            command_hdr_hir_tdr_tir_sdr_sir,
+            "HIR 16 TDI(ABCD);",
+            "", Command::HIR(Pattern {
                length: 16,
                tdi: Some(vec![0xCD, 0xAB]),
                tdo: None,
                mask: None,
                smask: None,
-            })))
+            })
         );
-        assert_eq!(
-            command_hdr_hir_tdr_tir_sdr_sir("HDR 0;"),
-            Ok(("", Command::HDR(Pattern {
+        assert_parse!(
+            command_hdr_hir_tdr_tir_sdr_sir,
+            "HDR 0;",
+            "", Command::HDR(Pattern {
                 length: 0, tdi: None, tdo: None, mask: None, smask: None
-            })))
+            })
         );
-        assert_eq!(
-            command_hdr_hir_tdr_tir_sdr_sir("HDR 8 TDI (1) TDO (2) MASK (3);"),
-            Ok(("", Command::HDR(Pattern {
+        assert_parse!(
+            command_hdr_hir_tdr_tir_sdr_sir,
+            "HDR 8 TDI (1) TDO (2) MASK (3);",
+            "", Command::HDR(Pattern {
                 length: 8, tdi: Some(vec![1]), tdo: Some(vec![2]), mask: Some(vec![3]), smask: None
-            })))
+            })
         );
-        assert_eq!(
-            command_hdr_hir_tdr_tir_sdr_sir("HDR 8 TDO (2) MASK (3);"),
-            Ok(("", Command::HDR(Pattern {
+        assert_parse!(
+            command_hdr_hir_tdr_tir_sdr_sir,
+            "HDR 8 TDO (2) MASK (3);",
+            "", Command::HDR(Pattern {
                 length: 8, tdi: None, tdo: Some(vec![2]), mask: Some(vec![3]), smask: None
-            })))
+            })
         );
-        assert_eq!(
-            command_hdr_hir_tdr_tir_sdr_sir("HDR 8 TDO (2);"),
-            Ok(("", Command::HDR(Pattern {
+        assert_parse!(
+            command_hdr_hir_tdr_tir_sdr_sir,
+            "HDR 8 TDO (2);",
+            "", Command::HDR(Pattern {
                 length: 8, tdi: None, tdo: Some(vec![2]), mask: None, smask: None
-            })))
+            })
         );
     }
 
     #[test]
     fn test_command_pio() {
         use VectorChar::*;
-        assert_eq!(command_pio("PIO (HLUDXZHHLL);"),
-                   Ok(("", Command::PIO(vec![H, L, U, D, X, Z, H, H, L, L]))));
+        assert_parse!(
+            command_pio, "PIO (HLUDXZHHLL);",
+            "", Command::PIO(vec![H, L, U, D, X, Z, H, H, L, L])
+        );
     }
 
     #[test]
     fn test_command_piomap() {
         use PIOMapDirection::*;
-        assert_eq!(
-            command_piomap("PIOMAP (IN  STROBE
-                                    IN  ALE
-                                    OUT DISABLE
-                                    OUT ENABLE
-                                    OUT CLEAR
-                                    IN  SET);"),
-            Ok(("", Command::PIOMap(vec![
+        assert_parse!(
+            command_piomap,
+            "PIOMAP (IN  STROBE
+                     IN  ALE
+                     OUT DISABLE
+                     OUT ENABLE
+                     OUT CLEAR
+                     IN  SET);",
+            "", Command::PIOMap(vec![
                 (In, "STROBE".to_string()),
                 (In, "ALE".to_string()),
                 (Out, "DISABLE".to_string()),
                 (Out, "ENABLE".to_string()),
                 (Out, "CLEAR".to_string()),
                 (In, "SET".to_string()),
-            ]))),
+            ])
         );
     }
 
     #[test]
     fn test_command_runtest() {
-        assert_eq!(
-            command_runtest("RUNTEST 1000 TCK ENDSTATE DRPAUSE;"),
-            Ok(("", Command::RunTest {
+        assert_parse!(
+            command_runtest, "RUNTEST 1000 TCK ENDSTATE DRPAUSE;",
+            "", Command::RunTest {
                 run_state: None,
                 form: RunTestForm::Clocked {
                     run_count: 1000,
@@ -957,11 +1036,11 @@ mod tests {
                     time: None,
                 },
                 end_state: Some(State::DRPAUSE),
-            }))
+            }
         );
-        assert_eq!(
-            command_runtest("RUNTEST 20 SCK;"),
-            Ok(("", Command::RunTest {
+        assert_parse!(
+            command_runtest, "RUNTEST 20 SCK;",
+            "", Command::RunTest {
                 run_state: None,
                 form: RunTestForm::Clocked {
                     run_count: 20,
@@ -969,11 +1048,11 @@ mod tests {
                     time: None,
                 },
                 end_state: None,
-            }))
+            }
         );
-        assert_eq!(
-            command_runtest("RUNTEST 1000000 TCK 1 SEC;"),
-            Ok(("", Command::RunTest {
+        assert_parse!(
+            command_runtest, "RUNTEST 1000000 TCK 1 SEC;",
+            "", Command::RunTest {
                 run_state: None,
                 form: RunTestForm::Clocked {
                     run_count: 1000000,
@@ -981,87 +1060,87 @@ mod tests {
                     time: Some(RunTestTime { min: 1.0, max: None }),
                 },
                 end_state: None,
-            }))
+            }
         );
-        assert_eq!(
-            command_runtest("RUNTEST 10.0E-3 SEC MAXIMUM 50.0E-3 SEC ENDSTATE IDLE;"),
-            Ok(("", Command::RunTest {
+        assert_parse!(
+            command_runtest, "RUNTEST 10.0E-3 SEC MAXIMUM 50.0E-3 SEC ENDSTATE IDLE;",
+            "", Command::RunTest {
                 run_state: None,
                 form: RunTestForm::Timed(RunTestTime {
                     min: 10e-3,
                     max: Some(50e-3),
                 }),
                 end_state: Some(State::IDLE),
-            }))
+            }
         );
-        assert_eq!(
-            command_runtest("RUNTEST DRPAUSE 50E-3 SEC ENDSTATE IDLE;"),
-            Ok(("", Command::RunTest {
+        assert_parse!(
+            command_runtest, "RUNTEST DRPAUSE 50E-3 SEC ENDSTATE IDLE;",
+            "", Command::RunTest {
                 run_state: Some(State::DRPAUSE),
                 form: RunTestForm::Timed(RunTestTime {
                     min: 50e-3,
                     max: None,
                 }),
                 end_state: Some(State::IDLE),
-            }))
+            }
         );
-        assert_eq!(
-            command_runtest("RUNTEST 1 SEC;"),
-            Ok(("", Command::RunTest {
+        assert_parse!(
+            command_runtest, "RUNTEST 1 SEC;",
+            "", Command::RunTest {
                 run_state: None,
                 form: RunTestForm::Timed(RunTestTime {
                     min: 1.0,
                     max: None,
                 }),
                 end_state: None,
-            }))
+            }
         );
-        assert_eq!(
-            command_runtest("RUNTEST IDLE 1E-2 SEC;"),
-            Ok(("", Command::RunTest {
+        assert_parse!(
+            command_runtest, "RUNTEST IDLE 1E-2 SEC;",
+            "", Command::RunTest {
                 run_state: Some(State::IDLE),
                 form: RunTestForm::Timed(RunTestTime {
                     min: 1e-2,
                     max: None,
                 }),
                 end_state: None,
-            }))
+            }
         );
     }
 
     #[test]
     fn test_command_state() {
         use State::*;
-        assert_eq!(
-            command_state("STATE IDLE;"),
-            Ok(("", Command::State { path: None, end: IDLE })),
+        assert_parse!(
+            command_state, "STATE IDLE;",
+            "", Command::State { path: None, end: IDLE }
         );
-        assert_eq!(
-            command_state("STATE DRPAUSE;"),
-            Ok(("", Command::State { path: None, end: DRPAUSE })),
+        assert_parse!(
+            command_state, "STATE DRPAUSE;",
+            "", Command::State { path: None, end: DRPAUSE }
         );
-        assert_eq!(
-            command_state("STATE DREXIT2 DRUPDATE DRSELECT IRSELECT IRCAPTURE IREXIT1 IRPAUSE;"),
-            Ok(("", Command::State {
+        assert_parse!(
+            command_state, "STATE DREXIT2 DRUPDATE DRSELECT IRSELECT IRCAPTURE IREXIT1 IRPAUSE;",
+            "", Command::State{
                 path: Some(vec![DREXIT2, DRUPDATE, DRSELECT, IRSELECT, IRCAPTURE, IREXIT1]),
                 end: IRPAUSE
-            })),
+            }
         );
     }
 
     #[test]
     fn test_command_trst() {
         use TRSTMode::*;
-        assert_eq!(command_trst("TRST ON;"), Ok(("", Command::TRST(On))));
-        assert_eq!(command_trst("TRST off;"), Ok(("", Command::TRST(Off))));
-        assert_eq!(command_trst("TRST    z  ;"), Ok(("", Command::TRST(Z))));
-        assert_eq!(command_trst("TRST absent;"), Ok(("", Command::TRST(Absent))));
+        assert_parse!(command_trst, "TRST ON;", "", Command::TRST(On));
+        assert_parse!(command_trst, "TRST off;", "", Command::TRST(Off));
+        assert_parse!(command_trst, "TRST    z  ;", "", Command::TRST(Z));
+        assert_parse!(command_trst, "TRST absent;", "", Command::TRST(Absent));
     }
 
     #[test]
     fn test_command() {
-        assert_eq!(command("TRST ON;"), Ok(("", Command::TRST(TRSTMode::On))));
-        assert_eq!(command("FREQUENCY;"), Ok(("", Command::Frequency(None))));
+        assert_parse!(command, "TRST ON;", "", Command::TRST(TRSTMode::On));
+        assert_parse!(command, "FREQUENCY;", "", Command::Frequency(None));
     }
 
     #[test]
