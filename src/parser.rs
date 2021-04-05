@@ -650,8 +650,8 @@ fn command(input: Span) -> IResult<Span, Command> {
 
 /// Parse complete input into a vector of commands.
 ///
-/// Returns an error if the input could not be fully parsed.
-pub fn parse(input: &str) -> Result<Vec<Command>, SVFParseError> {
+/// The input is fully parsed, and an error is returned if the input is invalid.
+pub fn parse_complete(input: &str) -> Result<Vec<Command>, SVFParseError> {
     all_consuming(terminated(
         many0(complete(preceded(ws0, command))),
         ws0_complete,
@@ -662,6 +662,31 @@ pub fn parse(input: &str) -> Result<Vec<Command>, SVFParseError> {
             nom::Err::Failure(e) => e,
             _                    => unreachable!(),
         })
+}
+
+/// Parse complete input into an iterator of commands.
+///
+/// The input is parsed incrementally and so errors are only returned when encountered;
+/// use [`parse_complete`] instead to validate the entire input.
+pub fn parse_iter(input: &str) -> impl Iterator<Item = Result<Command, SVFParseError>> + '_ {
+    let input = Span::new(input);
+    let mut i = input;
+    let mut stop = false;
+    let it = std::iter::from_fn(move|| {
+        if stop { return None };
+        match delimited(ws0, command, ws0)(i) {
+            Ok((rem, o)) => {
+                i = rem;
+                Some(Ok(o))
+            },
+            Err(nom::Err::Error(e)) | Err(nom::Err::Failure(e)) => {
+                stop = true;
+                Some(Err(e))
+            },
+            _ => None
+        }
+    });
+    it
 }
 
 #[cfg(test)]
