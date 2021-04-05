@@ -74,6 +74,36 @@ impl State {
     pub fn is_stable(&self) -> bool {
         matches!(self, State::DRPAUSE | State::IRPAUSE | State::RESET | State::IDLE)
     }
+
+    /// Return the default path to move from the current state `self` to an end state `end`,
+    /// when both `self` and `end` are stable states.
+    ///
+    /// The returned path only includes the intermediate states and not the start or end state.
+    /// If either `self` or `end` are not stable, None is returned.
+    pub fn default_path(&self, end: &State) -> Option<Vec<State>> {
+        use State::*;
+        match (self, end) {
+            (RESET, RESET)      => Some(vec![]),
+            (RESET, IDLE)       => Some(vec![]),
+            (RESET, DRPAUSE)    => Some(vec![IDLE, DRSELECT, DRCAPTURE, DREXIT1]),
+            (RESET, IRPAUSE)    => Some(vec![IDLE, DRSELECT, IRSELECT, IRCAPTURE, IREXIT1]),
+            (IDLE, RESET)       => Some(vec![DRSELECT, IRSELECT]),
+            (IDLE, IDLE)        => Some(vec![]),
+            (IDLE, DRPAUSE)     => Some(vec![DRSELECT, DRCAPTURE, DREXIT1]),
+            (IDLE, IRPAUSE)     => Some(vec![DRSELECT, IRSELECT, IRCAPTURE, IREXIT1]),
+            (DRPAUSE, RESET)    => Some(vec![DREXIT2, DRUPDATE, DRSELECT, IRSELECT]),
+            (DRPAUSE, IDLE)     => Some(vec![DREXIT2, DRUPDATE]),
+            (DRPAUSE, DRPAUSE)  => Some(vec![DREXIT2, DRUPDATE, DRSELECT, DRCAPTURE, DREXIT1]),
+            (DRPAUSE, IRPAUSE)  => Some(vec![DREXIT2, DRUPDATE, DRSELECT, IRSELECT, IRCAPTURE,
+                                             IREXIT1]),
+            (IRPAUSE, RESET)    => Some(vec![IREXIT2, IRUPDATE, DRSELECT, IRSELECT]),
+            (IRPAUSE, IDLE)     => Some(vec![IREXIT2, IRUPDATE]),
+            (IRPAUSE, DRPAUSE)  => Some(vec![IREXIT2, IRUPDATE, DRSELECT, DRCAPTURE, DREXIT1]),
+            (IRPAUSE, IRPAUSE)  => Some(vec![IREXIT2, IRUPDATE, DRSELECT, IRSELECT, IRCAPTURE,
+                                             IREXIT1]),
+            _                   => None,
+        }
+    }
 }
 
 /// Vector characters for a parallel test vector.
@@ -102,33 +132,33 @@ pub enum VectorChar {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pattern {
     /// Number of bits to be scanned.
-    length: u32,
+    pub length: u32,
 
     /// Value to be scanned into the target.
     /// If not specified, the previously specified TDI for this command is used.
     /// Bits are packed into bytes least-significant-bit and least-significant-byte first,
     /// and the vector is automatically zero-padded to contain enough bits for the length.
-    tdi: Option<Vec<u8>>,
+    pub tdi: Option<Vec<u8>>,
 
     /// Value to compare against actual values scanned out of the target.
     /// If not specified, no comparison is performed.
     /// Bits are packed into bytes least-significant-bit and least-significant-byte first,
     /// and the vector is automatically zero-padded to contain enough bits for the length.
-    tdo: Option<Vec<u8>>,
+    pub tdo: Option<Vec<u8>>,
 
     /// Mask used when comparing TDO values against actual values.
     /// 1 indicates care, 0 indicates don't-care.
     /// If not specified, the previously specified MASK for this command is used.
     /// Bits are packed into bytes least-significant-bit and least-significant-byte first,
     /// and the vector is automatically zero-padded to contain enough bits for the length.
-    mask: Option<Vec<u8>>,
+    pub mask: Option<Vec<u8>>,
 
     /// Mask TDI data.
     /// 1 indicates care, 0 indicates don't-care.
     /// If not specified, the previously specified SMASK for this command is used.
     /// Bits are packed into bytes least-significant-bit and least-significant-byte first,
     /// and the vector is automatically zero-padded to contain enough bits for the length.
-    smask: Option<Vec<u8>>,
+    pub smask: Option<Vec<u8>>,
 }
 
 impl Pattern {
@@ -188,8 +218,8 @@ pub enum TRSTMode {
 /// Minimum and optional maximum time to run a RunTest command for.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunTestTime {
-    min: f64,
-    max: Option<f64>,
+    pub min: f64,
+    pub max: Option<f64>,
 }
 
 /// Possible forms of the RunTest arguments.
@@ -207,18 +237,22 @@ pub enum RunTestForm {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     /// State for the bus after a DR scan.
+    ///
+    /// The state is checked to be a stable state when parsing.
     EndDR(State),
 
     /// State for the bus after an IR scan.
+    ///
+    /// The state is checked to be a stable state when parsing.
     EndIR(State),
 
     /// Maximum TCK frequency for subsequent scans, state changes, and test operations.
     Frequency(Option<f64>),
 
-    /// Default header pattern shifted in before every data register scan operation.
+    /// Default header pattern to be shifted in before every data register scan operation.
     HDR(Pattern),
 
-    /// Default header pattern shifted in before every instruction register scan operation.
+    /// Default header pattern to be shifted in before every instruction register scan operation.
     HIR(Pattern),
 
     /// Parallel input/output test vector.
@@ -232,8 +266,8 @@ pub enum Command {
     /// or a specified length of time or both, then move to the specified end state.
     RunTest {
         /// State to hold during this command.
-        /// One of IRPAUSE, DRPAUSE, RESET, or IDLE.
-        /// If not specified, uses the run_state specified in the previous RUNTEST command.
+        /// Checked to be a stable state when parsing.
+        /// If not specified, use the run_state specified in the previous RUNTEST command.
         run_state: Option<State>,
 
         /// The run_count, run_clk, min_time, and max_time parameters are stored
@@ -242,9 +276,9 @@ pub enum Command {
         form: RunTestForm,
 
         /// State to enter after completion of command.
-        /// One of IRPAUSE, DRPAUSE, RESET, or IDLE.
-        /// If not specified, the default end state is used, which is the most
-        /// recently specified end_state or run_state, or IDLE.
+        /// Checked to be a stable state when parsing.
+        /// If not specified, use the default end state, which is the most
+        /// recently specified end_state or run_state, or IDLE otherwise.
         end_state: Option<State>,
     },
 
@@ -255,24 +289,21 @@ pub enum Command {
     SIR(Pattern),
 
     /// Force target to a stable state, optionally specifying the path to traverse.
-    /// If no path is specified, the default path for the current and final state is used.
+    /// If no path is specified, use the default path between the current and final state.
     State {
         /// Path to take to reach the end state. States must be in an order that obeys the
         /// TAP state machine. If not specified, the default path from the current state to
         /// the end state is used.
-        /// Valid states are RESET, IDLE, DRSELECT, DRCAPTURE, DRSHIFT, DRPAUSE, DREXIT1,
-        /// DREXIT2, DRUPDATE, IRSELECT, IRCAPTURE, IRSHIFT, IRPAUSE, IREXIT1, IREXIT2, and
-        /// IRUPDATE.
         path: Option<Vec<State>>,
 
-        /// Final state to reach. Must be one of IRPAUSE, DRPAUSE, RESET, or IDLE.
+        /// Final state to reach. Checked to be a stable state when parsing.
         end: State,
     },
 
-    /// Default trailer pattern shifted in before every data register scan operation.
+    /// Default trailer pattern to be shifted in before every data register scan operation.
     TDR(Pattern),
 
-    /// Default trailer pattern shifted in before every instruction register scan operation.
+    /// Default trailer pattern to be shifted in before every instruction register scan operation.
     TIR(Pattern),
 
     /// Operation of TRST signal.
