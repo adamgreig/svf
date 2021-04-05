@@ -573,7 +573,6 @@ fn command_runtest(input: Span) -> IResult<Span, Command> {
                     Some((run_count, run_clk)) => RunTestForm::Clocked {
                         run_count, run_clk, time,
                     },
-                    // If neither are specified, use time if available.
                     // If neither run_count nor run_clk are specified, use time if available,
                     // otherwise return an error.
                     None => match time {
@@ -655,7 +654,12 @@ fn command(input: Span) -> IResult<Span, Command> {
 
 /// Parse complete input into a vector of commands.
 ///
-/// The input is fully parsed, and an error is returned if the input is invalid.
+/// The input must be a complete SVF file, and it is fully parsed.
+/// If parsing is successful, returns a vector of all parsed commands.
+///
+/// If there is an error in parsing, an [`SVFParseError`] is returned,
+/// which contains the line and column number of the error and an error
+/// description, and implements Display for showing errors to users.
 pub fn parse_complete(input: &str) -> Result<Vec<Command>, SVFParseError> {
     all_consuming(terminated(
         many0(complete(preceded(ws0, command))),
@@ -671,8 +675,17 @@ pub fn parse_complete(input: &str) -> Result<Vec<Command>, SVFParseError> {
 
 /// Parse complete input into an iterator of commands.
 ///
-/// The input is parsed incrementally and so errors are only returned when encountered;
-/// use [`parse_complete`] instead to validate the entire input.
+/// The returned iterator parses the file incrementally, returning each
+/// valid [`Command`] in sequence until it either reaches the end of the
+/// input string or encounters a parsing error.
+///
+/// Because the file is parsed incrementally, errors later in the file are
+/// only reported when encountered, even if some commands have already been
+/// parsed correctly. To parse the entire file in one shot, use [`parse_complete`].
+///
+/// On error, an [`SVFParseError`] is returned, which contains the line and column
+/// number of the error and an error description, and implements Display for showing
+/// errors to users.
 pub fn parse_iter(input: &str) -> impl Iterator<Item = Result<Command, SVFParseError>> + '_ {
     let input = Span::new(input);
     let mut i = input;
