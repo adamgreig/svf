@@ -1,13 +1,17 @@
 // Copyright 2021 Adam Greig
 // Licensed under the MIT license.
 
+#![allow(clippy::upper_case_acronyms)]
+
 //! # svf
 //!
-//! Parse SVF files.
+//! Parse and generate SVF files.
 //!
-//! Use [`parse`] to parse a full SVF file into a vector of [`Command`],
-//! or construct [`Command`] manually and use their Display trait implementation
-//! to generate SVF files.
+//! Use [`parse_complete`] to parse a full SVF file into a vector of [`Command`],
+//! or [`parse_iter`] to create an iterator over [`Command`] which parses incrementally.
+//!
+//! Once parsed, or if you construct [`Command`] manually, the Display trait
+//! implementation can be used to generate SVF files.
 
 mod display;
 mod parser;
@@ -68,10 +72,7 @@ pub enum State {
 impl State {
     /// Check if this state is one of the stable states IRPAUSE, DRPAUSE, RESET, or IDLE.
     pub fn is_stable(&self) -> bool {
-        match self {
-            State::DRPAUSE | State::IRPAUSE | State::RESET | State::IDLE => true,
-            _ => false,
-        }
+        matches!(self, State::DRPAUSE | State::IRPAUSE | State::RESET | State::IDLE)
     }
 }
 

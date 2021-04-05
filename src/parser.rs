@@ -1,3 +1,8 @@
+// Copyright 2021 Adam Greig
+// Licensed under the MIT license.
+
+#![allow(clippy::upper_case_acronyms)]
+
 use thiserror::Error;
 use nom::{
     branch::{alt, permutation},
@@ -373,7 +378,7 @@ fn pattern(input: Span) -> IResult<Span, Pattern> {
             success(None)
         };
         ($tag:literal) => {
-            map(preceded(ws0, named_scandata($tag)), |x| Some(x))
+            map(preceded(ws0, named_scandata($tag)), Some)
         };
     }
 
@@ -459,7 +464,7 @@ fn command_frequency(input: Span) -> IResult<Span, Command> {
         tag_no_case("FREQUENCY"),
         cut(opt(delimited(ws1, cut(real), preceded(ws0, tag_no_case("HZ"))))),
         cut(preceded(ws0, nom_char(';'))),
-    ), |f| Command::Frequency(f))(input)
+    ), Command::Frequency)(input)
 }
 
 /// Parse the HDR, HIR, TDR, TIR, SDR, and SIR commands, which all specify patterns.
@@ -497,7 +502,7 @@ fn command_pio(input: Span) -> IResult<Span, Command> {
         terminated(tag_no_case("PIO"), ws1),
         cut(delimited(ws0, vector_string, ws0)),
         cut(nom_char(';')),
-    ), |vs| Command::PIO(vs))(input)
+    ), Command::PIO)(input)
 }
 
 /// Parse the PIOMAP command, which specifies column names and directions for PIO.
@@ -508,7 +513,7 @@ fn command_piomap(input: Span) -> IResult<Span, Command> {
             cut(delimited(ws0, alt((piomap_dir, piomap_idx)), ws0)),
             cut(nom_char(';')),
         ),
-        |v| Command::PIOMap(v),
+        Command::PIOMap,
     )(input)
 }
 
@@ -526,7 +531,7 @@ fn command_runtest(input: Span) -> IResult<Span, Command> {
                     map(tuple((
                         terminated(decimal, ws1),
                         run_clk,
-                    )), |x| Some(x)),
+                    )), Some),
                     opt(tuple((
                         delimited(ws1, real, preceded(ws1, tag_no_case("SEC"))),
                         opt(delimited(
@@ -547,7 +552,7 @@ fn command_runtest(input: Span) -> IResult<Span, Command> {
                             cut(real),
                             preceded(ws1, tag_no_case("SEC"))
                         )),
-                    )), |x| Some(x)),
+                    )), Some),
                     opt(preceded(delimited(ws1, tag_no_case("ENDSTATE"), ws1), state)),
                 )),
             ))),
@@ -672,7 +677,7 @@ pub fn parse_iter(input: &str) -> impl Iterator<Item = Result<Command, SVFParseE
     let input = Span::new(input);
     let mut i = input;
     let mut stop = false;
-    let it = std::iter::from_fn(move|| {
+    std::iter::from_fn(move|| {
         if stop { return None };
         match delimited(ws0, command, ws0_complete)(i) {
             Ok((rem, o)) => {
@@ -685,8 +690,7 @@ pub fn parse_iter(input: &str) -> impl Iterator<Item = Result<Command, SVFParseE
             },
             _ => None
         }
-    });
-    it
+    })
 }
 
 #[cfg(test)]

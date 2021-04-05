@@ -1,3 +1,5 @@
+#![allow(clippy::write_with_newline)]
+
 use std::fmt;
 
 use super::{
