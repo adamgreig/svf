@@ -674,7 +674,7 @@ pub fn parse_iter(input: &str) -> impl Iterator<Item = Result<Command, SVFParseE
     let mut stop = false;
     let it = std::iter::from_fn(move|| {
         if stop { return None };
-        match delimited(ws0, command, ws0)(i) {
+        match delimited(ws0, command, ws0_complete)(i) {
             Ok((rem, o)) => {
                 i = rem;
                 Some(Ok(o))
@@ -1167,9 +1167,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse() {
+    fn test_parse_complete() {
         assert_eq!(
-            parse("ENDDR IDLE; FREQUENCY; SDR 1 TDI (0);"),
+            parse_complete("ENDDR IDLE; FREQUENCY; SDR 1 TDI (0);"),
             Ok(vec![
                 Command::EndDR(State::IDLE),
                 Command::Frequency(None),
@@ -1180,6 +1180,22 @@ mod tests {
                 }),
             ])
         );
-        assert_eq!(parse(" ENDDR IDLE; //x\n\n"), Ok(vec![Command::EndDR(State::IDLE)]));
+        assert_eq!(parse_complete(" ENDDR IDLE; //x\n\n"), Ok(vec![Command::EndDR(State::IDLE)]));
+    }
+
+    #[test]
+    fn test_parse_iter() {
+        assert_eq!(
+            parse_iter("ENDDR IDLE; FREQUENCY; SDR 1 TDI (0);").collect::<Vec<Result<Command, SVFParseError>>>(),
+            vec![
+                Ok(Command::EndDR(State::IDLE)),
+                Ok(Command::Frequency(None)),
+                Ok(Command::SDR(Pattern {
+                    length: 1,
+                    tdi: Some(vec![0]),
+                    tdo: None, mask: None, smask: None,
+                })),
+            ]
+        );
     }
 }
