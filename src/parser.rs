@@ -730,7 +730,7 @@ pub fn parse_iter_bufread<T: std::io::BufRead>(input: &mut T)
                 };
 
                 // Update line count with number of newlines in buffer.
-                line += buf.iter().filter(|&x| *x == b'\n').count() as u32;
+                line += bytecount::count(&buf, b'\n') as u32;
 
                 // Parse buffer, which contains either whitespace followed by a command,
                 // or only whitespace at the EOF.

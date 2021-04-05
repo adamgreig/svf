@@ -12,6 +12,7 @@ nom = "6.1"
 nom_locate = "3.0"
 thiserror = "1.0"
 log = "0.4"
+bytecount = "0.6"
 
 [[example]]
 name = "parse_file"
