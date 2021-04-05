@@ -15,7 +15,7 @@
 
 mod display;
 mod parser;
-pub use parser::{parse_complete, parse_iter, SVFParseError as ParseError};
+pub use parser::{parse_complete, parse_iter, parse_iter_bufread, SVFParseError as ParseError};
 
 /// IEEE 1149.1 TAP states with SVF TAP state names.
 #[derive(Copy, Clone, Debug, PartialEq)]

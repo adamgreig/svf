@@ -72,6 +72,10 @@ pub enum SVFParseError {
     InvalidRunTest(ErrLoc),
     #[error("Incomplete data at {0}: retry with at least {1} more bytes of data")]
     Incomplete(ErrLoc, usize),
+    #[error("UTF-8 error reading file: {0:?}")]
+    Utf8Error(std::str::Utf8Error),
+    #[error("I/O error reading file: {0:?}")]
+    IoError(std::io::ErrorKind),
     #[error("Parser error type {1:?} at {0}")]
     Parser(ErrLoc, String),
 }
@@ -706,6 +710,42 @@ pub fn parse_iter(input: &str) -> impl Iterator<Item = Result<Command, SVFParseE
     })
 }
 
+pub fn parse_iter_bufread<T: std::io::BufRead>(input: &mut T)
+    -> impl Iterator<Item = Result<Command, SVFParseError>> + '_
+{
+    let mut line = 1;
+    std::iter::from_fn(move|| {
+        let mut buf = Vec::new();
+        match input.read_until(b';', &mut buf) {
+            // End of file reached, stop iteration.
+            Ok(0) => None,
+            // Successfully read some bytes until either a semicolon or EOF.
+            Ok(_) => {
+                // Decode bytes to UTF-8 and create a new Span.
+                let span = match std::str::from_utf8(&buf) {
+                    // We tell the span what line number it starts from and set an offset of 0
+                    // to prevent reading anything before the current fragment of the buffer.
+                    Ok(s)  => unsafe { Span::new_from_raw_offset(0, line, s, ()) },
+                    Err(e) => { return Some(Err(SVFParseError::Utf8Error(e))) },
+                };
+
+                // Update line count with number of newlines in buffer.
+                line += buf.iter().filter(|&x| *x == b'\n').count() as u32;
+
+                // Parse buffer, which contains either whitespace followed by a command,
+                // or only whitespace at the EOF.
+                match preceded(ws0_complete, opt(command))(span) {
+                    Ok((_, Some(c))) => Some(Ok(c)),
+                    Ok((_, None))    => None,
+                    Err(nom::Err::Error(e)) | Err(nom::Err::Failure(e)) => Some(Err(e)),
+                    _ => None,
+                }
+            },
+            Err(e) => Some(Err(SVFParseError::IoError(e.kind()))),
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1201,9 +1241,18 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_complete_err() {
+        assert_eq!(
+            parse_complete("ENDDR IDLE;\nFREQUENCY;\nSDR A TDI (0);\n"),
+            Err(SVFParseError::Parser(ErrLoc { line: 3, col: 5 }, "Digit".to_string())),
+        );
+    }
+
+    #[test]
     fn test_parse_iter() {
         assert_eq!(
-            parse_iter("ENDDR IDLE; FREQUENCY; SDR 1 TDI (0);").collect::<Vec<Result<Command, SVFParseError>>>(),
+            parse_iter("ENDDR IDLE; FREQUENCY; SDR 1 TDI (0);")
+                .collect::<Vec<Result<Command, SVFParseError>>>(),
             vec![
                 Ok(Command::EndDR(State::IDLE)),
                 Ok(Command::Frequency(None)),
@@ -1212,6 +1261,49 @@ mod tests {
                     tdi: Some(vec![0]),
                     tdo: None, mask: None, smask: None,
                 })),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_iter_err() {
+        assert_eq!(
+            parse_iter("ENDDR IDLE;\nFREQUENCY;\nSDR A TDI (0);\n")
+                .collect::<Vec<Result<Command, SVFParseError>>>(),
+            vec![
+                Ok(Command::EndDR(State::IDLE)),
+                Ok(Command::Frequency(None)),
+                Err(SVFParseError::Parser(ErrLoc { line: 3, col: 5 }, "Digit".to_string())),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_iter_bufread() {
+        let mut cursor = std::io::Cursor::new(b"ENDDR IDLE; FREQUENCY; SDR 1 TDI (0);\n");
+        assert_eq!(
+            parse_iter_bufread(&mut cursor).collect::<Vec<Result<Command, SVFParseError>>>(),
+            vec![
+                Ok(Command::EndDR(State::IDLE)),
+                Ok(Command::Frequency(None)),
+                Ok(Command::SDR(Pattern {
+                    length: 1,
+                    tdi: Some(vec![0]),
+                    tdo: None, mask: None, smask: None,
+                })),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_iter_bufread_err() {
+        let mut cursor = std::io::Cursor::new(b"ENDDR IDLE;\nFREQUENCY;\nSDR A TDI (0);\n");
+        assert_eq!(
+            parse_iter_bufread(&mut cursor).collect::<Vec<Result<Command, SVFParseError>>>(),
+            vec![
+                Ok(Command::EndDR(State::IDLE)),
+                Ok(Command::Frequency(None)),
+                Err(SVFParseError::Parser(ErrLoc { line: 3, col: 5 }, "Digit".to_string())),
             ]
         );
     }

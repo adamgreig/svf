@@ -6,6 +6,7 @@
 
 * Make fields of `Pattern` and `RunTestTime` public.
 * Add `default_path()` to `State`.
+* Add new `parse_iter_bufread` method.
 
 ## [v0.1.0] - 2021-04-05
 
