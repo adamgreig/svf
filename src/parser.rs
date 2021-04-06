@@ -33,7 +33,7 @@ use super::{
 // Alias Span for brevity.
 type Span<'a> = LocatedSpan<&'a str>;
 
-/// Location of a parsing error in the SVF file.
+/// Location of a parsing error in the SVF input.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct ErrLoc {
     /// Line number where parsing error occurred.
@@ -72,9 +72,9 @@ pub enum SVFParseError {
     InvalidRunTest(ErrLoc),
     #[error("Incomplete data at {0}: retry with at least {1} more bytes of data")]
     Incomplete(ErrLoc, usize),
-    #[error("UTF-8 error reading file: {0:?}")]
+    #[error("UTF-8 error reading input: {0:?}")]
     Utf8Error(std::str::Utf8Error),
-    #[error("I/O error reading file: {0:?}")]
+    #[error("I/O error reading input: {0:?}")]
     IoError(std::io::ErrorKind),
     #[error("Parser error type {1:?} at {0}")]
     Parser(ErrLoc, String),
@@ -658,7 +658,7 @@ fn command(input: Span) -> IResult<Span, Command> {
 
 /// Parse complete input into a vector of commands.
 ///
-/// The input must be a complete SVF file, and it is fully parsed.
+/// The input must be a complete SVF input, and it is fully parsed.
 /// If parsing is successful, returns a vector of all parsed commands.
 ///
 /// If there is an error in parsing, an [`SVFParseError`] is returned,
@@ -679,13 +679,13 @@ pub fn parse_complete(input: &str) -> Result<Vec<Command>, SVFParseError> {
 
 /// Parse complete input into an iterator of commands.
 ///
-/// The returned iterator parses the file incrementally, returning each
+/// The returned iterator parses the input incrementally, returning each
 /// valid [`Command`] in sequence until it either reaches the end of the
 /// input string or encounters a parsing error.
 ///
-/// Because the file is parsed incrementally, errors later in the file are
+/// Because the input is parsed incrementally, errors later in the input are
 /// only reported when encountered, even if some commands have already been
-/// parsed correctly. To parse the entire file in one shot, use [`parse_complete`].
+/// parsed correctly. To parse the entire input in one shot, use [`parse_complete`].
 ///
 /// On error, an [`SVFParseError`] is returned, which contains the line and column
 /// number of the error and an error description, and implements Display for showing
@@ -710,6 +710,20 @@ pub fn parse_iter(input: &str) -> impl Iterator<Item = Result<Command, SVFParseE
     })
 }
 
+/// Parse an SVF input from a BufRead into an iterator of commands.
+///
+/// The returned iterator reads from the BufRead one command at a time, returning
+/// each valid [`Command`] in sequence until it either reaches the end of the input
+/// or encounters a parsing error. Because the input is read in chunks, neither the
+/// whole input nor all the commands need to be stored in memory at once.
+///
+/// Because the input is parsed incrementally, errors later in the input are
+/// only reported when encountered, even if some commands have already been
+/// parsed correctly. To parse the entire input in one shot, use [`parse_complete`].
+///
+/// On error, an [`SVFParseError`] is returned, which contains the line and column
+/// number of the error and an error description, and implements Display for showing
+/// errors to users.
 pub fn parse_iter_bufread<T: std::io::BufRead>(input: &mut T)
     -> impl Iterator<Item = Result<Command, SVFParseError>> + '_
 {
@@ -717,7 +731,7 @@ pub fn parse_iter_bufread<T: std::io::BufRead>(input: &mut T)
     std::iter::from_fn(move|| {
         let mut buf = Vec::new();
         match input.read_until(b';', &mut buf) {
-            // End of file reached, stop iteration.
+            // End of input reached, stop iteration.
             Ok(0) => None,
             // Successfully read some bytes until either a semicolon or EOF.
             Ok(_) => {

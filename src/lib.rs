@@ -8,10 +8,12 @@
 //! Parse and generate SVF files.
 //!
 //! Use [`parse_complete`] to parse a full SVF file into a vector of [`Command`],
-//! or [`parse_iter`] to create an iterator over [`Command`] which parses incrementally.
+//! [`parse_iter`] to create an iterator over [`Command`] which parses incrementally,
+//! or [`parse_iter_bufread`] to create an iterator using a `BufRead` input, allowing
+//! both the input and output to be processed piece-by-piece.
 //!
-//! Once parsed, or if you construct [`Command`] manually, the Display trait
-//! implementation can be used to generate SVF files.
+//! Once parsed, or if you construct [`Command`] manually, the `Display` trait
+//! implementation on [`Command`] can be used to generate SVF files.
 
 mod display;
 mod parser;
