@@ -8,7 +8,7 @@ description = "Serial Vector Format (SVF) file parser"
 license = "MIT"
 
 [dependencies]
-nom = "6.1"
+nom = "6.2"
 nom_locate = "3.0"
 thiserror = "1.0"
 log = "0.4"
