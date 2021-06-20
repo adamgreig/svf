@@ -12,7 +12,11 @@ jobs:
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
-          toolchain: stable
+          # Stay with 1.51.0 until either
+          # https://github.com/xd009642/tarpaulin/issues/756
+          # or https://github.com/Geal/nom/issues/1311
+          # are resolved.
+          toolchain: 1.51.0
           override: true
       - name: Install Tarpaulin
         uses: actions-rs/install@v0.1
