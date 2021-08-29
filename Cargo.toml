@@ -1,6 +1,6 @@
 [package]
 name = "svf"
-version = "0.2.1"
+version = "0.3.0"
 authors = ["Adam Greig <adam@adamgreig.com>"]
 edition = "2018"
 repository = "https://github.com/adamgreig/svf"
@@ -8,8 +8,8 @@ description = "Serial Vector Format (SVF) file parser"
 license = "MIT"
 
 [dependencies]
-nom = "6.2"
-nom_locate = "3.0"
+nom = "7.0"
+nom_locate = "4.0"
 thiserror = "1.0"
 log = "0.4"
 bytecount = "0.6"
